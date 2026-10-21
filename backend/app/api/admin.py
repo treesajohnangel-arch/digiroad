@@ -313,6 +313,7 @@ async def execute_repair(payload: AdminRepairInput):
 
     database_persisted = supabase is not None
     if supabase is not None:
+        rpc_success = False
         try:
             supabase.rpc("apply_road_repair", {
                 "p_complaint_id": payload.complaint_id,
@@ -328,9 +329,57 @@ async def execute_repair(payload: AdminRepairInput):
                 "p_road_health": health_status,
                 "p_cumulative_esal_msa": esal_msa,
             }).execute()
-        except Exception as e:
-            logger.exception("Transactional database repair failed")
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Repair was not saved. Database transaction failed; apply the repair workflow migration and retry.") from e
+            rpc_success = True
+        except Exception as rpc_err:
+            logger.warning(f"RPC apply_road_repair failed ({rpc_err}), falling back to direct table updates.")
+
+        if not rpc_success:
+            try:
+                # Direct update user_complaints
+                cid_val = int(payload.complaint_id) if payload.complaint_id.isdigit() else payload.complaint_id
+                supabase.table("user_complaints").update({
+                    "status": ComplaintStatus.REPAIRED.value,
+                    "repaired_at": now,
+                }).eq("complaint_id", cid_val).execute()
+
+                # Direct update dynamic_road_evaluations
+                dyn_payload = {
+                    "segment_id": target_segment_id,
+                    "pci_score": float(pci_new),
+                    "iri_m_km": round(iri_new, 4),
+                    "cracking_pct": round(cracking_new, 4),
+                    "rut_depth_mm": round(rutting_new, 4),
+                    "raveling_pct": round(raveling_new, 4),
+                    "patching_pct": round(patching_new, 4),
+                    "pothole_pct": 0.0,
+                    "road_health": health_status,
+                    "cumulative_esal_msa": esal_msa,
+                    "execution_timestamp": now,
+                }
+                res_dyn = supabase.table("dynamic_road_evaluations").update(dyn_payload).eq("segment_id", target_segment_id).execute()
+                if not res_dyn.data:
+                    supabase.table("dynamic_road_evaluations").insert(dyn_payload).execute()
+
+                # Direct insert historic_road_evaluations
+                hist_payload = {
+                    "segment_id": target_segment_id,
+                    "evaluation_timestamp": now,
+                    "pci_score": float(pci_new),
+                    "iri_m_km": round(iri_new, 4),
+                    "cracking_pct": round(cracking_new, 4),
+                    "rut_depth_mm": round(rutting_new, 4),
+                    "raveling_pct": round(raveling_new, 4),
+                    "patching_pct": round(patching_new, 4),
+                    "road_health": health_status,
+                    "cumulative_esal_msa": esal_msa,
+                }
+                supabase.table("historic_road_evaluations").insert(hist_payload).execute()
+            except Exception as e:
+                logger.exception("Direct database repair fallback failed")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=f"Could not persist repair to database: {e}",
+                ) from e
     else:
         for comp in IN_MEMORY_COMPLAINTS:
             if str(comp.get("complaint_id")) == payload.complaint_id or str(comp.get("id")) == payload.complaint_id:
