@@ -93,6 +93,7 @@ class AdminRepairResponse(BaseModel):
     segment_id: str
     segment_metrics: SegmentRepairMetrics
     updated_at: str
+    database_persisted: bool
 
 
 class RepairFinishedInput(BaseModel):
@@ -128,34 +129,50 @@ async def execute_repair(payload: AdminRepairInput):
             detail="Invalid repair_type. Must be 'PATCHING' or 'FULL_RESURFACING'.",
         )
 
+    if repair_type == "PATCHING" and (
+        payload.patch_length_m is None or payload.patch_length_m <= 0
+        or payload.patch_width_m is None or payload.patch_width_m <= 0
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Positive patch_length_m and patch_width_m are required for PATCHING.",
+        )
+
     now = datetime.now(timezone.utc).isoformat()
-    raw_segment = payload.segment_id or ""
-    target_segment_id = normalize_segment_id(raw_segment) if raw_segment else ""
-
-    # 1. Resolve target segment from complaint if not explicitly provided
-    if not target_segment_id:
-        for comp in IN_MEMORY_COMPLAINTS:
-            if str(comp.get("complaint_id")) == payload.complaint_id or str(comp.get("id")) == payload.complaint_id:
-                target_segment_id = normalize_segment_id(comp.get("segment_id", ""))
-                break
-
-    if not target_segment_id and supabase:
+    requested_segment_id = normalize_segment_id(payload.segment_id or "")
+    complaint_segment_id = ""
+    if supabase is not None:
         try:
             cid_val = int(payload.complaint_id) if payload.complaint_id.isdigit() else payload.complaint_id
-            for tbl, id_col in [("user_complaints", "complaint_id"), ("complaints", "id")]:
-                try:
-                    res_c = supabase.table(tbl).select("segment_id").eq(id_col, cid_val).limit(1).execute()
-                    if res_c.data and len(res_c.data) > 0:
-                        target_segment_id = normalize_segment_id(res_c.data[0].get("segment_id", ""))
-                        if target_segment_id:
-                            break
-                except Exception:
-                    pass
+            res_c = (
+                supabase.table("user_complaints")
+                .select("complaint_id,segment_id")
+                .eq("complaint_id", cid_val)
+                .limit(1)
+                .execute()
+            )
+            if not res_c.data:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Complaint not found.")
+            complaint_segment_id = normalize_segment_id(res_c.data[0].get("segment_id", ""))
         except Exception as e:
+            if isinstance(e, HTTPException):
+                raise
             logger.warning(f"Error fetching segment for complaint {payload.complaint_id}: {e}")
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Could not load the complaint from the database.")
+    else:
+        complaint = next((
+            c for c in IN_MEMORY_COMPLAINTS
+            if str(c.get("complaint_id")) == payload.complaint_id or str(c.get("id")) == payload.complaint_id
+        ), None)
+        if complaint is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Complaint not found in development data.")
+        complaint_segment_id = normalize_segment_id(complaint.get("segment_id", ""))
 
+    if requested_segment_id and requested_segment_id != complaint_segment_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The selected road segment does not match this complaint.")
+    target_segment_id = complaint_segment_id
     if not target_segment_id:
-        target_segment_id = "MDR47-S01"
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="The complaint has no valid road segment.")
 
     # 2. Fetch segment geometry & current distress state
     seg_length_m = 1000.0
@@ -167,7 +184,7 @@ async def execute_repair(payload: AdminRepairInput):
     iri_old = 1.2
     esal_msa = 0.0
 
-    # In-memory baseline lookup
+    # In-memory baseline for development mode.
     for seg in MOCK_ROAD_SEGMENTS:
         if seg.get("segment_id") == target_segment_id or seg.get("segment_id", "").replace("-", " ") == target_segment_id.replace("-", " "):
             cracking_old = float(seg.get("cracking_pct", 0.0))
@@ -177,16 +194,22 @@ async def execute_repair(payload: AdminRepairInput):
             iri_old = float(seg.get("iri_m_km", 1.2))
             break
 
-    # Database live state lookup
-    if supabase:
+    # Load the current database baseline. Missing rows must not silently turn into zero-valued roads.
+    if supabase is not None:
         try:
             res_static = supabase.table("road_segments").select("*").eq("segment_id", target_segment_id).limit(1).execute()
-            if res_static.data and len(res_static.data) > 0:
-                srow = res_static.data[0]
-                if srow.get("segment_length_km"):
-                    seg_length_m = float(srow["segment_length_km"]) * 1000.0
-                if srow.get("carriageway_width_m"):
-                    seg_width_m = float(srow["carriageway_width_m"])
+            if not res_static.data:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Road segment not found.")
+            srow = res_static.data[0]
+            if srow.get("segment_length_km"):
+                seg_length_m = float(srow["segment_length_km"]) * 1000.0
+            if srow.get("carriageway_width_m"):
+                seg_width_m = float(srow["carriageway_width_m"])
+            cracking_old = float(srow.get("cracking_pct") or cracking_old)
+            raveling_old = float(srow.get("raveling_pct") or raveling_old)
+            rutting_old = float(srow.get("rut_depth_mm") or srow.get("rutting_mm") or rutting_old)
+            patching_old = float(srow.get("patching_pct") or patching_old)
+            iri_old = float(srow.get("iri_m_km") or iri_old)
 
             res_dyn = supabase.table("dynamic_road_evaluations").select("*").eq("segment_id", target_segment_id).limit(1).execute()
             if res_dyn.data and len(res_dyn.data) > 0:
@@ -206,15 +229,13 @@ async def execute_repair(payload: AdminRepairInput):
                 if drow.get("cumulative_esal_msa") is not None:
                     esal_msa = float(drow["cumulative_esal_msa"])
         except Exception as e:
+            if isinstance(e, HTTPException):
+                raise
             logger.warning(f"Failed to query live properties from Supabase for {target_segment_id}: {e}")
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Could not load current road metrics from the database.")
 
     # 3. Perform repair calculations
     if repair_type == "PATCHING":
-        if payload.patch_length_m is None or payload.patch_length_m <= 0 or payload.patch_width_m is None or payload.patch_width_m <= 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="patch_length_m and patch_width_m must be provided and greater than 0 for PATCHING repair.",
-            )
         p_len = float(payload.patch_length_m)
         p_wid = float(payload.patch_width_m)
 
@@ -277,15 +298,6 @@ async def execute_repair(payload: AdminRepairInput):
         health_status = "Good"
         color_hex = "#10B981"
 
-    # 4. State Synchronization: In-Memory
-    for comp in IN_MEMORY_COMPLAINTS:
-        if str(comp.get("complaint_id")) == payload.complaint_id or str(comp.get("id")) == payload.complaint_id:
-            comp["status"] = ComplaintStatus.REPAIRED.value
-            comp["repaired_at"] = now
-            comp["updated_at"] = now
-            comp["repair_type"] = repair_type
-            break
-
     segment_metrics = SegmentRepairMetrics(
         segment_id=target_segment_id,
         pci_score=pci_new,
@@ -299,77 +311,39 @@ async def execute_repair(payload: AdminRepairInput):
         color_hex=color_hex,
     )
 
+    database_persisted = supabase is not None
+    if supabase is not None:
+        try:
+            supabase.rpc("apply_road_repair", {
+                "p_complaint_id": payload.complaint_id,
+                "p_segment_id": target_segment_id,
+                "p_repair_type": repair_type.lower(),
+                "p_repaired_at": now,
+                "p_pci_score": float(pci_new),
+                "p_iri_m_km": round(iri_new, 4),
+                "p_cracking_pct": round(cracking_new, 4),
+                "p_rut_depth_mm": round(rutting_new, 4),
+                "p_raveling_pct": round(raveling_new, 4),
+                "p_patching_pct": round(patching_new, 4),
+                "p_road_health": health_status,
+                "p_cumulative_esal_msa": esal_msa,
+            }).execute()
+        except Exception as e:
+            logger.exception("Transactional database repair failed")
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Repair was not saved. Database transaction failed; apply the repair workflow migration and retry.") from e
+    else:
+        for comp in IN_MEMORY_COMPLAINTS:
+            if str(comp.get("complaint_id")) == payload.complaint_id or str(comp.get("id")) == payload.complaint_id:
+                comp["status"] = ComplaintStatus.REPAIRED.value
+                comp["repaired_at"] = now
+                comp["updated_at"] = now
+                comp["repair_type"] = repair_type.lower()
+                break
+
     for seg in MOCK_ROAD_SEGMENTS:
         if seg.get("segment_id") == target_segment_id or seg.get("segment_id", "").replace("-", " ") == target_segment_id.replace("-", " "):
             seg.update(segment_metrics.model_dump())
             break
-
-    # 5. Database Synchronization
-    if supabase:
-        try:
-            cid_val = int(payload.complaint_id) if payload.complaint_id.isdigit() else payload.complaint_id
-            for tbl, id_col in [("user_complaints", "complaint_id"), ("complaints", "id")]:
-                try:
-                    supabase.table(tbl).update({
-                        "status": ComplaintStatus.REPAIRED.value,
-                        "repaired_at": now,
-                    }).eq(id_col, cid_val).execute()
-                except Exception:
-                    pass
-
-            db_pci = float(pci_new)
-            dynamic_payload = {
-                "segment_id": target_segment_id,
-                "pci_score": db_pci,
-                "iri_m_km": round(iri_new, 4),
-                "cracking_pct": round(cracking_new, 4),
-                "raveling_pct": round(raveling_new, 4),
-                "patching_pct": round(patching_new, 4),
-                "pothole_pct": 0.0,
-                "road_health": health_status,
-                "execution_timestamp": now,
-            }
-            # Overwrite current row in dynamic_road_evaluations (live state table)
-            supabase.table("dynamic_road_evaluations").update(dynamic_payload).eq("segment_id", target_segment_id).execute()
-
-            # Optional synchronization to pavement_segments if table exists
-            try:
-                supabase.table("pavement_segments").update(dynamic_payload).eq("segment_id", target_segment_id).execute()
-            except Exception:
-                pass
-
-            # Insert time-series row in historic_road_evaluations
-            historic_payload = {
-                "segment_id": target_segment_id,
-                "evaluation_timestamp": now,
-                "pci_score": db_pci,
-                "iri_m_km": round(iri_new, 4),
-                "cracking_pct": round(cracking_new, 4),
-                "raveling_pct": round(raveling_new, 4),
-                "patching_pct": round(patching_new, 4),
-                "road_health": health_status,
-                "cumulative_esal_msa": esal_msa,
-            }
-            try:
-                supabase.table("historic_road_evaluations").insert(historic_payload).execute()
-            except Exception as e_hist:
-                if "invalid input syntax for type integer" in str(e_hist).lower():
-                    # Fallback if historic_road_evaluations.pci_score column hasn't been migrated to float8 yet
-                    historic_payload["pci_score"] = int(round(db_pci))
-                    supabase.table("historic_road_evaluations").insert(historic_payload).execute()
-                else:
-                    raise e_hist
-
-            # Optional insert into pavement_history if table exists
-            try:
-                supabase.table("pavement_history").insert({
-                    **historic_payload,
-                    "repair_type": repair_type,
-                }).execute()
-            except Exception:
-                pass
-        except Exception as e:
-            logger.error(f"Error executing database synchronization for repair: {e}")
 
     action_label = "Patching completed" if repair_type == "PATCHING" else "Full Resurfacing completed"
     return AdminRepairResponse(
@@ -380,6 +354,7 @@ async def execute_repair(payload: AdminRepairInput):
         segment_id=target_segment_id,
         segment_metrics=segment_metrics,
         updated_at=now,
+        database_persisted=database_persisted,
     )
 
 

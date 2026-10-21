@@ -83,7 +83,7 @@ async def signup(payload: SignUpRequest):
         )
         return AuthResponse(
             message="User signed up successfully (Mock Mode)",
-            access_token="mock-jwt-session-token",
+            access_token="demo-user-token",
             token_type="bearer",
             role="public",
             user=mock_profile,
@@ -205,16 +205,19 @@ async def login(payload: LoginRequest):
 
     if supabase is None:
         # Mock mode fallback
+        role = "admin" if clean_email == "admin@digiroad.gov" else "public"
+        if clean_email not in {"admin@digiroad.gov", "engineer@digiroad.local"}:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
         return AuthResponse(
             message="Login successful (Mock Mode)",
-            access_token="mock-jwt-access-token",
+            access_token="demo-admin-token" if role == "admin" else "demo-user-token",
             token_type="bearer",
-            role="public",
+            role=role,
             user=UserProfile(
-                id="mock-user-001",
+                id="mock-admin-001" if role == "admin" else "mock-user-001",
                 email=clean_email,
-                full_name="Mock User",
-                role="public",
+                full_name="Demo Administrator" if role == "admin" else "Demo Engineer",
+                role=role,
             ),
         )
 
