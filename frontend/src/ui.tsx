@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Navigate, NavLink, Route, Routes, useNavigate, useLocation } from 'react-router-dom';
 import {
   Activity,
@@ -17,6 +17,7 @@ import {
   LogOut,
   MapPin,
   Menu,
+  Play,
   Plus,
   Route as RouteIcon,
   Search,
@@ -42,6 +43,11 @@ import { MapContainer, TileLayer, Polyline, ZoomControl, useMap } from 'react-le
 import { Complaint, Health, Segment, useApp } from './state';
 
 const hc = (h: Health) => h.toLowerCase().replace(' ', '-');
+const isRecentRepair = (complaint: Complaint) => {
+  if (complaint.status !== 'Repaired') return false;
+  const timestamp = complaint.repairedAt ? Date.parse(complaint.repairedAt) : Date.parse(complaint.created);
+  return Number.isFinite(timestamp) && Date.now() - timestamp <= 7 * 24 * 60 * 60 * 1000;
+};
 const color = (h: Health) =>
   ({
     'Very Poor': '#800000',
@@ -69,13 +75,26 @@ function App() {
 function Brand() {
   return (
     <div className="brand">
-      <span className="brand-icon">
-        <RouteIcon size={20} />
-      </span>
-      <b>
-        DIGI<span>ROAD</span>
-      </b>
+      <LogoMark />
+      <b>DIGIROAD</b>
     </div>
+  );
+}
+
+function LogoMark() {
+  return (
+    <svg className="brand-mark" viewBox="0 0 100 68" aria-hidden="true">
+      <defs>
+        <linearGradient id="roadmark" x1="15%" y1="90%" x2="90%" y2="10%">
+          <stop offset="0" stopColor="#176d72" />
+          <stop offset="1" stopColor="#18c4c5" />
+        </linearGradient>
+      </defs>
+      <path d="M8 62c0-15 7-27 22-37C42 17 49 12 49 4" />
+      <path d="M29 62c0-12 6-21 17-29C58 24 63 15 64 7" />
+      <path d="M50 62c1-9 7-15 18-20 9-4 16-10 21-18" />
+      <path d="M69 62c6-6 14-9 24-10" />
+    </svg>
   );
 }
 
@@ -90,6 +109,16 @@ function Login() {
   const [show, S] = useState(false);
   const [busy, B] = useState(false);
   const [error, Xe] = useState('');
+  const [intro, setIntro] = useState(true);
+
+  useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setIntro(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setIntro(false), 1450);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -127,13 +156,15 @@ function Login() {
   }
 
   return (
-    <main className="login">
+    <main className={`login ${intro ? 'login-intro-active' : 'login-revealed'}`}>
+      {intro && (
+        <div className="brand-intro" aria-hidden="true">
+          <div className="brand-intro-lockup"><LogoMark /><b>DIGIROAD</b></div>
+        </div>
+      )}
       <section className="login-left">
         <Brand />
         <div className="hero-copy">
-          <div className="live-label">
-            <i /> MUNICIPAL ROAD INTELLIGENCE
-          </div>
           <h1>
             See the road
             <br />
@@ -147,22 +178,12 @@ function Login() {
               <path className="road-dash" d="M-20 225 C95 220 135 126 250 143 S420 242 620 46" />
               <path className="road-good" d="M-20 225 C95 220 135 126 250 143 S420 242 620 46" />
             </svg>
-            <span className="art-pin">
-              8.57° N<br />76.88° E
-            </span>
           </div>
-        </div>
-        <div className="login-foot">
-          <span>KERALA · INDIA</span>
-          <span>LOCAL DEMO / v1.0</span>
         </div>
       </section>
       <section className="login-right">
-        <div className="mobile-brand">
-          <Brand />
-        </div>
+        <div className="mobile-brand"><Brand /></div>
         <div className="auth">
-          <span className="kicker">FIELD OPERATIONS PORTAL</span>
           <h2>{tab === 'login' ? 'Welcome back' : 'Create an account'}</h2>
           <p>{tab === 'login' ? 'Sign in to continue to your workspace.' : 'Join the municipal road health workspace.'}</p>
           <div className="tabs">
@@ -230,15 +251,6 @@ function Login() {
               <ChevronRight size={17} />
             </button>
           </form>
-          <div className="local-note">
-            <Shield size={15} /> Local demo access · authenticated backend support
-          </div>
-        </div>
-        <div className="login-foot">
-          <span>© 2026 DIGIROAD</span>
-          <span>
-            SECURE WORKSPACE · <i />
-          </span>
         </div>
       </section>
     </main>
@@ -272,13 +284,16 @@ function Shell() {
         <div className="side-label">WORKSPACE</div>
         <nav>
           <NavLink to="/home" onClick={() => M(false)}>
-            <Layers3 />Overview
+            <Layers3 />Home
           </NavLink>
           <NavLink to="/simulations" onClick={() => M(false)}>
             <Activity />Simulations
           </NavLink>
           <NavLink to="/trends" onClick={() => M(false)}>
             <TrendingUp />Trends
+          </NavLink>
+          <NavLink to="/repaired" onClick={() => M(false)}>
+            <Check />Repaired
           </NavLink>
           <NavLink to="/admin" onClick={() => M(false)}>
             <Shield />Admin<ChevronRight className="nav-arrow" />
@@ -363,6 +378,7 @@ function Shell() {
             <Route path="/home" element={<Home />} />
             <Route path="/simulations" element={<Simulations />} />
             <Route path="/trends" element={<Trends />} />
+            <Route path="/repaired" element={<RepairHistory />} />
             <Route path="/admin" element={<Admin />} />
           </Routes>
         </div>
@@ -416,8 +432,10 @@ function Home() {
   const [modal, Modal] = useState(false);
   const [bot, BotOpen] = useState(false);
 
+  const [selectedComplaint, setSelectedComplaint] = useState<Complaint | null>(null);
+
   const under = complaints.filter(c => c.status === 'Under Progress');
-  const done = complaints.filter(c => c.status === 'Repaired');
+  const done = complaints.filter(isRecentRepair);
   const results = segments.filter(
     s => s.name.toLowerCase().includes(query.toLowerCase()) || s.id.toLowerCase().includes(query.toLowerCase())
   );
@@ -430,8 +448,8 @@ function Home() {
   return (
     <>
       <Heading
-        eyebrow="NETWORK OVERVIEW / 19 OCT 2026"
-        title="Road health overview"
+        eyebrow="HOME / NETWORK OVERVIEW"
+        title="Home"
         description="A live view of pavement condition across the monitored corridor."
         action={
           <button className="secondary" onClick={() => Modal(true)}>
@@ -537,8 +555,18 @@ function Home() {
           </button>
         </div>
         <div className="tables">
-          <ComplaintTable title="Under progress" entries={under} empty="No active complaints (All clear)" />
-          <ComplaintTable title="Repaired" entries={done} empty="Repairs will appear here" />
+          <ComplaintTable
+            title="Under progress"
+            entries={under}
+            empty="No active complaints (All clear)"
+            onSelectComplaint={setSelectedComplaint}
+          />
+          <ComplaintTable
+            title="Repaired"
+            entries={done}
+            empty="Repairs will appear here"
+            onSelectComplaint={setSelectedComplaint}
+          />
         </div>
       </section>
       <button className="bot-fab" onClick={() => BotOpen(true)}>
@@ -546,6 +574,7 @@ function Home() {
       </button>
       {modal && <ComplaintModal close={() => Modal(false)} submit={addComplaint} />}
       {selected && <SegmentModal segment={selected} close={() => Sel(null)} />}
+      {selectedComplaint && <ComplaintDetailModal complaint={selectedComplaint} close={() => setSelectedComplaint(null)} />}
       {bot && <PaveBot close={() => BotOpen(false)} />}
     </>
   );
@@ -633,7 +662,17 @@ function RoadFallback() {
   );
 }
 
-function ComplaintTable({ title, entries, empty }: { title: string; entries: Complaint[]; empty: string }) {
+function ComplaintTable({
+  title,
+  entries,
+  empty,
+  onSelectComplaint,
+}: {
+  title: string;
+  entries: Complaint[];
+  empty: string;
+  onSelectComplaint?: (c: Complaint) => void;
+}) {
   const { segments } = useApp();
   return (
     <div className="complaint-table">
@@ -643,7 +682,12 @@ function ComplaintTable({ title, entries, empty }: { title: string; entries: Com
       </div>
       {entries.length ? (
         entries.map(c => (
-          <div className="complaint-row" key={c.id}>
+          <div
+            className="complaint-row clickable"
+            key={c.id}
+            onClick={() => onSelectComplaint?.(c)}
+            title="Click to view complaint details"
+          >
             <span className="complaint-icon">
               <AlertTriangle size={16} />
             </span>
@@ -1147,8 +1191,102 @@ function Trends() {
   );
 }
 
+function RepairHistory() {
+  const { complaints, segments } = useApp();
+  const [selectedComplaint, setSelectedComplaint] = useState<Complaint | null>(null);
+  const [filterSegment, setFilterSegment] = useState<string>('all');
+  const [viewTab, setViewTab] = useState<'archived' | 'all'>('archived');
+
+  const allRepaired = complaints.filter(c => c.status === 'Repaired');
+  const archived = allRepaired.filter(c => !isRecentRepair(c));
+
+  const baseList = viewTab === 'archived' ? archived : allRepaired;
+  const filtered = filterSegment === 'all'
+    ? baseList
+    : baseList.filter(c => c.segmentId === filterSegment);
+
+  return (
+    <>
+      <Heading
+        eyebrow="MAINTENANCE / REPAIR HISTORY"
+        title="Repaired complaints"
+        description="Historical archive of submitted and repaired road complaints across the municipal network."
+      />
+
+      <div className="history-filter-bar">
+        <div className="history-tabs">
+          <button
+            className={`history-tab ${viewTab === 'archived' ? 'active' : ''}`}
+            onClick={() => setViewTab('archived')}
+          >
+            Archived (&gt; 7 Days) ({archived.length})
+          </button>
+          <button
+            className={`history-tab ${viewTab === 'all' ? 'active' : ''}`}
+            onClick={() => setViewTab('all')}
+          >
+            All Historical Repairs ({allRepaired.length})
+          </button>
+        </div>
+
+        <select
+          className="history-segment-filter"
+          value={filterSegment}
+          onChange={e => setFilterSegment(e.target.value)}
+        >
+          <option value="all">All Road Corridors</option>
+          {segments.map(s => (
+            <option key={s.id} value={s.id}>
+              {s.name} ({s.id})
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="admin-table repair-history-table">
+        <div className="admin-table-head">
+          <b>Repair history register</b>
+          <span>{filtered.length} RECORDS · CLICK TO INSPECT</span>
+        </div>
+        <div className="admin-columns history-columns">
+          <span>COMPLAINT</span><span>ROAD SEGMENT</span><span>REPAIR ACTION</span><span>COMPLETED</span>
+        </div>
+        {filtered.length ? filtered.map(c => {
+          const segment = segments.find(s => s.id === c.segmentId);
+          return (
+            <div
+              className="admin-row history-row clickable"
+              key={c.id}
+              onClick={() => setSelectedComplaint(c)}
+              title="Click to view complaint dossier"
+            >
+              <div>
+                <b>{c.category}</b>
+                <small>{c.id} · {c.citizen}</small>
+                <p>{c.description}</p>
+              </div>
+              <span>{segment?.name || c.segmentId}</span>
+              <span className={`repaired-tag ${c.repairType === 'PATCHING' ? 'patching' : 'resurfacing'}`}>
+                <Check size={13} />{c.repairType === 'PATCHING' ? 'Patched' : 'Full resurfacing'}
+              </span>
+              <span>{c.repairedAt ? new Date(c.repairedAt).toLocaleString() : c.created}</span>
+            </div>
+          );
+        }) : <div className="empty">No repaired complaints match the current filter.</div>}
+      </div>
+
+      {selectedComplaint && (
+        <ComplaintDetailModal
+          complaint={selectedComplaint}
+          close={() => setSelectedComplaint(null)}
+        />
+      )}
+    </>
+  );
+}
+
 function Admin() {
-  const { role, complaints, segments, executeRepair } = useApp();
+  const { role, complaints, segments, executeRepair, markUnderProcess } = useApp();
   const nav = useNavigate();
 
   // Dual-action modal states
@@ -1156,7 +1294,9 @@ function Admin() {
   const [patchLength, setPatchLength] = useState<string>('25');
   const [patchWidth, setPatchWidth] = useState<string>('3.5');
   const [resurfaceModalComplaint, setResurfaceModalComplaint] = useState<Complaint | null>(null);
+  const [selectedComplaint, setSelectedComplaint] = useState<Complaint | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
+  const [repairMenuId, setRepairMenuId] = useState<string | null>(null);
 
   if (role !== 'admin') {
     return (
@@ -1174,6 +1314,7 @@ function Admin() {
     );
   }
 
+  const nilCount = complaints.filter(c => c.status === 'nil').length;
   const open = complaints.filter(c => c.status === 'Under Progress');
   const done = complaints.filter(c => c.status === 'Repaired');
 
@@ -1241,6 +1382,10 @@ function Admin() {
           <b>{String(complaints.length).padStart(2, '0')}</b>
         </div>
         <div>
+          <small>New / nil</small>
+          <b style={{ color: '#94a3b8' }}>{String(nilCount).padStart(2, '0')}</b>
+        </div>
+        <div>
           <small>Under progress</small>
           <b className="amber">{String(open.length).padStart(2, '0')}</b>
         </div>
@@ -1248,16 +1393,12 @@ function Admin() {
           <small>Repaired</small>
           <b>{String(done.length).padStart(2, '0')}</b>
         </div>
-        <div>
-          <small>Segments affected</small>
-          <b>{new Set(complaints.map(c => c.segmentId)).size}</b>
-        </div>
       </div>
 
       <div className="admin-table">
         <div className="admin-table-head">
           <b>Complaint register & repair actions</b>
-          <span>{complaints.length} RECORDS · SYNCHRONIZED</span>
+          <span>{complaints.length} RECORDS · CLICK ROW TO VIEW</span>
         </div>
         <div className="admin-columns">
           <span>REPORT</span>
@@ -1268,7 +1409,12 @@ function Admin() {
         {complaints.map(c => {
           const seg = segments.find(s => s.id === c.segmentId);
           return (
-            <div className="admin-row" key={c.id}>
+            <div
+              className="admin-row clickable"
+              key={c.id}
+              onClick={() => setSelectedComplaint(c)}
+              title="Click to view full complaint dossier"
+            >
               <div>
                 <b>{c.category}</b>
                 <small>
@@ -1286,28 +1432,50 @@ function Admin() {
               </span>
               <span className={`severity-text ${c.severity.toLowerCase()}`}>{c.severity}</span>
               <div>
-                {c.status === 'Under Progress' ? (
-                  <div className="repair-actions">
+                {c.status === 'nil' ? (
+                  <div className="repair-status-cell">
+                    <span className="status-pill nil">nil</span>
                     <button
-                      className="btn-repair patching"
-                      onClick={() => {
-                        setPatchModalComplaint(c);
-                        setPatchLength('25');
-                        setPatchWidth('3.5');
+                      className="btn-under-process"
+                      title="Update status to Under Process"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        markUnderProcess(c.id);
                       }}
-                      title="Apply asphalt patching"
                     >
-                      <Wrench size={13} />
-                      <span>Patching</span>
+                      <Play size={11} fill="currentColor" />
+                      <span>Under Process</span>
                     </button>
-                    <button
-                      className="btn-repair resurfacing"
-                      onClick={() => setResurfaceModalComplaint(c)}
-                      title="Execute full segment resurfacing"
-                    >
-                      <RefreshCw size={13} />
-                      <span>Full Resurface</span>
-                    </button>
+                  </div>
+                ) : c.status === 'Under Progress' ? (
+                  <div className="repair-status-cell">
+                    <span className="status-pill pending">Under Process</span>
+                    <div className="repair-status-menu">
+                      <button
+                        className="btn-repair repaired-trigger"
+                        aria-expanded={repairMenuId === c.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setRepairMenuId(repairMenuId === c.id ? null : c.id);
+                        }}
+                      >
+                        <Check size={13} /><span>Repaired</span><ChevronDown size={13} />
+                      </button>
+                      {repairMenuId === c.id && (
+                        <div className="repair-status-options" onClick={e => e.stopPropagation()}>
+                          <button onClick={() => {
+                            setPatchModalComplaint(c);
+                            setPatchLength('25');
+                            setPatchWidth('3.5');
+                            setRepairMenuId(null);
+                          }}><Wrench size={13} />Patched</button>
+                          <button onClick={() => {
+                            setResurfaceModalComplaint(c);
+                            setRepairMenuId(null);
+                          }}><RefreshCw size={13} />Full resurface</button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ) : (
                   <span className={`repaired-tag ${c.repairType === 'PATCHING' ? 'patching' : 'resurfacing'}`}>
@@ -1320,6 +1488,13 @@ function Admin() {
           );
         })}
       </div>
+
+      {selectedComplaint && (
+        <ComplaintDetailModal
+          complaint={selectedComplaint}
+          close={() => setSelectedComplaint(null)}
+        />
+      )}
 
       {/* 1. Patching Modal */}
       {patchModalComplaint && patchTargetSegment && (
@@ -1405,7 +1580,7 @@ function Admin() {
                 </button>
                 <button type="submit" className="primary btn-amber" disabled={submitting}>
                   <Wrench size={14} />
-                  {submitting ? 'Applying Patch…' : 'Save & Update'}
+                  {submitting ? 'Updating…' : 'Update'}
                 </button>
               </div>
             </form>
@@ -1462,13 +1637,133 @@ function Admin() {
                 onClick={handleResurfaceConfirm}
               >
                 <RefreshCw size={14} />
-                {submitting ? 'Resurfacing…' : 'Confirm Full Resurfacing'}
+                {submitting ? 'Updating…' : 'Update'}
               </button>
             </div>
           </div>
         </div>
       )}
     </>
+  );
+}
+
+function ComplaintDetailModal({
+  complaint: c,
+  close,
+}: {
+  complaint: Complaint;
+  close: () => void;
+}) {
+  const { segments, role, markUnderProcess } = useApp();
+  const seg = segments.find(s => s.id === c.segmentId);
+
+  return (
+    <div className="modal-backdrop" onClick={close}>
+      <div className="modal complaint-detail-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-head">
+          <div>
+            <div className="kicker">COMPLAINT DOSSIER · {c.id}</div>
+            <h2>{c.category}</h2>
+          </div>
+          <button className="icon-close" onClick={close} title="Close">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="detail-status-bar">
+          <div className="status-badge-wrap">
+            <span className="label">STATUS:</span>
+            {c.status === 'nil' ? (
+              <span className="status-pill nil">nil</span>
+            ) : c.status === 'Under Progress' ? (
+              <span className="status-pill pending">Under Process</span>
+            ) : (
+              <span className={`repaired-tag ${c.repairType === 'PATCHING' ? 'patching' : 'resurfacing'}`}>
+                <Check size={13} /> Repaired {c.repairType ? `(${c.repairType === 'PATCHING' ? 'Patching' : 'Resurfacing'})` : ''}
+              </span>
+            )}
+          </div>
+          <div className="severity-badge-wrap">
+            <span className="label">SEVERITY:</span>
+            <span className={`severity-text ${c.severity.toLowerCase()}`}>{c.severity}</span>
+          </div>
+        </div>
+
+        <div className="detail-section">
+          <div className="detail-label">ROAD CORRIDOR / LOCATION</div>
+          <div className="detail-card">
+            <div className="detail-road-name">
+              <MapPin size={16} />
+              <b>{seg?.name || c.segmentId}</b>
+              <small style={{ color: '#8c989f' }}>({c.segmentId})</small>
+            </div>
+            {seg && (
+              <div className="detail-road-metrics">
+                <span>Pavement Health: <b>{seg.health}</b></span>
+                <span>Current PCI: <b>{seg.pci} / 100</b></span>
+                <span>Cracking: <b>{seg.cracking}%</b></span>
+                <span>IRI: <b>{seg.iri} m/km</b></span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="detail-section">
+          <div className="detail-label">CITIZEN REPORT DESCRIPTION</div>
+          <div className="detail-description-box">
+            <p>{c.description}</p>
+          </div>
+        </div>
+
+        <div className="detail-grid-two">
+          <div>
+            <small>REPORTED BY</small>
+            <b>{c.citizen}</b>
+            {c.contact && <span className="detail-sub">{c.contact}</span>}
+          </div>
+          <div>
+            <small>SUBMITTED AT</small>
+            <b>{c.created}</b>
+          </div>
+        </div>
+
+        {c.status === 'Repaired' && (
+          <div className="detail-repair-box">
+            <div>
+              <small>REPAIR ACTION COMPLETED</small>
+              <b>{c.repairType === 'PATCHING' ? 'Targeted Asphalt Patching' : 'Full Surface Resurfacing'}</b>
+            </div>
+            {c.repairedAt && (
+              <div>
+                <small>COMPLETION DATE</small>
+                <b>{new Date(c.repairedAt).toLocaleString()}</b>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="modal-foot">
+          {role === 'admin' && c.status === 'nil' ? (
+            <button
+              className="primary btn-amber"
+              onClick={async () => {
+                await markUnderProcess(c.id);
+                close();
+              }}
+            >
+              <Play size={13} fill="currentColor" /> Update to Under Process
+            </button>
+          ) : (
+            <span style={{ fontSize: '12px', color: '#8c989f' }}>
+              DigiRoad Pavement Management Dossier
+            </span>
+          )}
+          <button className="secondary" onClick={close}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

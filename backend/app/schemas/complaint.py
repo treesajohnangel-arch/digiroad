@@ -5,15 +5,19 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class ComplaintStatus(str, Enum):
-    UNDER_PROCESS = "UNDER_PROCESS"
-    REPAIRED = "REPAIRED"
-    PENDING = "PENDING"
+    NIL = "nil"
+    UNDER_PROCESS = "under process"
+    REPAIRED = "repaired"
+    PENDING = "pending"
 
 
 class ComplaintCreate(BaseModel):
     segment_id: str = Field(..., description="Unique identifier for the road segment")
     complaint_heading: Optional[str] = Field("Road Complaint", description="Brief heading or issue category")
     description: str = Field(..., description="Detailed description of the road issue (max 100 words)")
+    citizen_name: Optional[str] = None
+    contact: Optional[str] = None
+    severity: Optional[str] = None
 
 
 class ComplaintResponse(BaseModel):
@@ -21,9 +25,13 @@ class ComplaintResponse(BaseModel):
     segment_id: str
     complaint_heading: Optional[str] = "Road Complaint"
     description: str
-    status: str = "UNDER_PROCESS"
+    status: str = "nil"
     created_at: Optional[str] = None
     repaired_at: Optional[str] = None
+    repair_type: Optional[str] = None
+    citizen_name: Optional[str] = None
+    contact: Optional[str] = None
+    severity: Optional[str] = None
 
     @field_validator("complaint_id", mode="before")
     @classmethod

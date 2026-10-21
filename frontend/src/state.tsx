@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
 export type Health = 'Very Poor' | 'Poor' | 'Fair' | 'Good';
 
@@ -23,11 +23,48 @@ export type Complaint = {
   category: string;
   severity: string;
   description: string;
-  status: 'Under Progress' | 'Repaired';
+  status: 'nil' | 'Under Progress' | 'Repaired';
   created: string;
   repairedAt?: string;
   repairType?: 'PATCHING' | 'FULL_RESURFACING';
 };
+
+type ApiComplaint = {
+  complaint_id: string;
+  segment_id: string;
+  complaint_heading?: string | null;
+  description?: string;
+  status?: string | null;
+  created_at?: string | null;
+  repaired_at?: string | null;
+  repair_type?: string | null;
+  citizen_name?: string | null;
+  contact?: string | null;
+  severity?: string | null;
+};
+
+export function normalizeStatus(st?: string | null): 'nil' | 'Under Progress' | 'Repaired' {
+  const s = (st || '').trim().toLowerCase();
+  if (s === 'repaired') return 'Repaired';
+  if (s === 'under process' || s === 'under_process' || s === 'under progress') return 'Under Progress';
+  return 'nil';
+}
+
+function fromApiComplaint(row: ApiComplaint): Complaint {
+  return {
+    id: String(row.complaint_id),
+    citizen: row.citizen_name || 'Resident',
+    contact: row.contact || '',
+    segmentId: row.segment_id,
+    category: row.complaint_heading || 'Road complaint',
+    severity: row.severity || 'Medium',
+    description: row.description || '',
+    status: normalizeStatus(row.status),
+    created: row.created_at ? new Date(row.created_at).toLocaleString() : '—',
+    repairedAt: row.repaired_at || undefined,
+    repairType: row.repair_type === 'PATCHING' || row.repair_type === 'FULL_RESURFACING' ? row.repair_type : undefined,
+  };
+}
 
 export type RepairActionPayload = {
   complaintId: string;
@@ -47,54 +84,48 @@ export type TrendPoint = {
 
 export const defaultSegments: Segment[] = [
   {
-    id: 'SEG-101',
-    name: 'Kazhakkoottam Main Road',
-    cracking: 22.4,
-    raveling: 14.8,
-    rutting: 5.2,
-    patching: 0.8,
-    iri: 4.2,
-    pci: 34,
+    id: 'MDR47-S01',
+    name: 'Vembayam - Pallipuram Road (MDR47 S01)',
+    cracking: 22.48,
+    raveling: 8.59,
+    rutting: 4.2,
+    patching: 0.29,
+    iri: 1.98,
+    pci: 47,
     health: 'Very Poor',
     coords: [
-      [8.5682, 76.8737],
-      [8.5695, 76.8794],
-      [8.5708, 76.8858],
-      [8.5717, 76.8912],
+      [8.6281, 76.9242],
+      [8.6225, 76.9160],
     ],
   },
   {
-    id: 'SEG-102',
-    name: 'Mangalapuram Junction Road',
-    cracking: 13.2,
-    raveling: 8.1,
-    rutting: 3.4,
-    patching: 0.5,
-    iri: 3.1,
-    pci: 61,
-    health: 'Fair',
+    id: 'MDR47-S02',
+    name: 'Vembayam - Pallipuram Road (MDR47 S02)',
+    cracking: 26.97,
+    raveling: 8.59,
+    rutting: 5.1,
+    patching: 0.36,
+    iri: 2.04,
+    pci: 40,
+    health: 'Very Poor',
     coords: [
-      [8.6078, 76.8768],
-      [8.6014, 76.8815],
-      [8.5955, 76.8864],
-      [8.5906, 76.8928],
+      [8.6225, 76.9160],
+      [8.6170, 76.9079],
     ],
   },
   {
-    id: 'SEG-103',
-    name: 'Technopark Access Road',
-    cracking: 4.6,
-    raveling: 2.8,
-    rutting: 1.1,
-    patching: 0.2,
-    iri: 1.7,
-    pci: 86,
-    health: 'Good',
+    id: 'MDR47-S03',
+    name: 'Vembayam - Pallipuram Road (MDR47 S03)',
+    cracking: 33.12,
+    raveling: 8.59,
+    rutting: 6.3,
+    patching: 0.45,
+    iri: 2.06,
+    pci: 30,
+    health: 'Very Poor',
     coords: [
-      [8.5579, 76.8788],
-      [8.5625, 76.8821],
-      [8.5662, 76.8842],
-      [8.5702, 76.8859],
+      [8.6170, 76.9079],
+      [8.6115, 76.8998],
     ],
   },
 ];
@@ -104,18 +135,18 @@ const seed: Complaint[] = [
     id: 'CMP-2418',
     citizen: 'Anjali Nair',
     contact: '••••• 4821',
-    segmentId: 'SEG-101',
+    segmentId: 'MDR47-S01',
     category: 'Pothole',
     severity: 'High',
     description: 'Deep pothole near the bus stop is forcing two-wheelers into traffic.',
-    status: 'Under Progress',
+    status: 'nil',
     created: 'Today, 09:42',
   },
   {
     id: 'CMP-2416',
     citizen: 'R. Suresh',
     contact: '••••• 7104',
-    segmentId: 'SEG-102',
+    segmentId: 'MDR47-S02',
     category: 'Surface damage',
     severity: 'Medium',
     description: 'Loose aggregate and surface wear at the junction approach.',
@@ -126,12 +157,13 @@ const seed: Complaint[] = [
     id: 'CMP-2397',
     citizen: 'Meera Das',
     contact: '••••• 2360',
-    segmentId: 'SEG-103',
+    segmentId: 'MDR47-S03',
     category: 'Drainage',
     severity: 'Low',
     description: 'Water collects along the curb after heavy rain.',
     status: 'Repaired',
     created: '12 Oct, 11:06',
+    repairedAt: '2026-10-12T11:06:00Z',
     repairType: 'FULL_RESURFACING',
   },
 ];
@@ -156,7 +188,8 @@ type AppState = {
   segments: Segment[];
   setSegments: React.Dispatch<React.SetStateAction<Segment[]>>;
   complaints: Complaint[];
-  addComplaint: (c: Omit<Complaint, 'id' | 'status' | 'created'>) => void;
+  addComplaint: (c: Omit<Complaint, 'id' | 'status' | 'created'>) => Promise<void>;
+  markUnderProcess: (id: string) => Promise<boolean>;
   repair: (id: string) => void;
   executeRepair: (payload: RepairActionPayload) => Promise<boolean>;
   trendLogs: Record<string, TrendPoint[]>;
@@ -169,7 +202,7 @@ const Ctx = createContext<AppState | null>(null);
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [role, setRole] = useState<'public' | 'admin'>('admin');
   const [user, setUser] = useState({ name: 'Demo Administrator', email: 'admin@digiroad.gov' });
-  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [authToken, setAuthToken] = useState<string | null>('demo-admin-token');
   const [loggedIn, setLoggedIn] = useState(true);
   const [users, setUsers] = useState(['engineer@digiroad.local', 'admin@digiroad.gov']);
   const [segmentsList, setSegmentsList] = useState<Segment[]>(defaultSegments);
@@ -177,9 +210,109 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [trendLogs, setTrendLogs] = useState<Record<string, TrendPoint[]>>({});
   const [toast, setToast] = useState('');
 
+  useEffect(() => {
+    let alive = true;
+    Promise.all([
+      fetch('/api/complaints').then(res => (res.ok ? res.json() : null)),
+      fetch('/api/home/map-data').then(res => (res.ok ? res.json() : null)),
+    ])
+      .then(([apiComplaints, mapData]) => {
+        if (!alive) return;
+        if (Array.isArray(apiComplaints) && apiComplaints.length > 0) {
+          const apiRows = (apiComplaints as ApiComplaint[]).map(fromApiComplaint);
+          setComplaints(apiRows);
+        }
+        if (mapData && mapData.features && mapData.features.length) {
+          const segs: Segment[] = mapData.features.map((f: any) => {
+            const p = f.properties || {};
+            const rawCoords = f.geometry?.coordinates || [];
+            const coords = rawCoords.map((c: [number, number]) => [c[1], c[0]] as [number, number]);
+            return {
+              id: p.segment_id,
+              name: p.road_name || p.segment_id,
+              cracking: Number((p.cracking_pct || 0).toFixed(2)),
+              raveling: Number((p.raveling_pct || 0).toFixed(2)),
+              rutting: Number((p.rut_depth_mm || 0).toFixed(2)),
+              patching: Number((p.patching_pct || 0).toFixed(2)),
+              iri: Number((p.iri_m_km || 1.2).toFixed(2)),
+              pci: Math.round(p.pci_score || 0),
+              health: (p.road_health as Health) || classifyHealth(p.pci_score || 0),
+              coords: coords.length ? coords : [[8.6281, 76.9242], [8.6225, 76.9160]],
+            };
+          });
+          if (segs.length) setSegmentsList(segs);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const notify = (s: string) => {
     setToast(s);
     window.setTimeout(() => setToast(''), 3500);
+  };
+
+  const markUnderProcess = async (id: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/complaints/${encodeURIComponent(id)}/under-process`, {
+        method: 'PATCH',
+      });
+      if (res.ok) {
+        setComplaints(prev =>
+          prev.map(c => (c.id === id ? { ...c, status: 'Under Progress' } : c))
+        );
+        notify(`Complaint #${id} updated to Under Process · Now active on Home`);
+        return true;
+      }
+    } catch (err) {
+      console.warn('API update under-process failed, applying locally:', err);
+    }
+    setComplaints(prev =>
+      prev.map(c => (c.id === id ? { ...c, status: 'Under Progress' } : c))
+    );
+    notify(`Complaint #${id} updated to Under Process · Now active on Home`);
+    return true;
+  };
+
+  const addComplaint = async (form: Omit<Complaint, 'id' | 'status' | 'created'>) => {
+    try {
+      const res = await fetch('/api/complaints/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          segment_id: form.segmentId,
+          complaint_heading: form.category,
+          description: form.description,
+          citizen_name: form.citizen,
+          contact: form.contact,
+          severity: form.severity,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const newC = fromApiComplaint(data);
+        newC.citizen = form.citizen;
+        newC.contact = form.contact;
+        newC.severity = form.severity;
+        newC.status = 'nil';
+        setComplaints(prev => [newC, ...prev]);
+        notify('Complaint submitted with status nil · Awaiting admin review');
+        return;
+      }
+    } catch (err) {
+      console.warn('API generate complaint failed, storing locally:', err);
+    }
+
+    const fallbackC: Complaint = {
+      ...form,
+      id: `CMP-${Math.floor(2400 + Math.random() * 500)}`,
+      status: 'nil',
+      created: 'Just now',
+    };
+    setComplaints(prev => [fallbackC, ...prev]);
+    notify('Complaint submitted with status nil · Awaiting admin review');
   };
 
   const executeRepair = async (payload: RepairActionPayload): Promise<boolean> => {
@@ -235,7 +368,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       apiSuccess = false;
     }
 
-    // Fallback deterministic formula calculation if API not reachable
+    // Deterministic formula calculation reducing cracking, rutting, patching, and IRI
     if (!apiSuccess) {
       if (payload.repairType === 'PATCHING') {
         const pLen = payload.patchLength || 10.0;
@@ -244,7 +377,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         const totalArea = 1000.0 * 7.0; // Standard 1km x 7m carriageway
         const deltaPatchingPct = (deltaArea / totalArea) * 100.0;
 
-        newPatching = Math.min(100.0, targetSegment.patching + deltaPatchingPct);
+        // Patching distress is restored and reduced
+        newPatching = Math.max(0.0, targetSegment.patching * (1.0 - deltaPatchingPct / 100.0));
         const deltaCrackingPct = deltaPatchingPct / 1.3;
         newCracking = Math.max(0.0, targetSegment.cracking - deltaCrackingPct);
         newRaveling = Math.max(0.0, targetSegment.raveling * (1.0 - deltaPatchingPct / 100.0));
@@ -254,7 +388,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         const a1 = 0.005;
         const a4 = 0.003;
         const a2 = 0.002;
-        const deltaIri = -(a1 * deltaCrackingPct + a4 * deltaRutting) + a2 * deltaPatchingPct;
+        const deltaIri = -(a1 * deltaCrackingPct + a4 * deltaRutting + a2 * (targetSegment.patching - newPatching));
         newIri = Math.max(1.2, targetSegment.iri + deltaIri);
 
         const deduct =
@@ -304,7 +438,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             ...c,
             status: 'Repaired',
             repairType: payload.repairType,
-            repairedAt: 'Just now',
+            repairedAt: new Date().toISOString(),
           };
         }
         return c;
@@ -363,18 +497,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       segments: segmentsList,
       setSegments: setSegmentsList,
       complaints,
-      addComplaint: c => {
-        setComplaints(v => [
-          {
-            ...c,
-            id: `CMP-${Math.floor(2400 + Math.random() * 500)}`,
-            status: 'Under Progress',
-            created: 'Just now',
-          },
-          ...v,
-        ]);
-        notify('Complaint submitted · Municipal team notified');
-      },
+      addComplaint,
+      markUnderProcess,
       repair,
       executeRepair,
       trendLogs,

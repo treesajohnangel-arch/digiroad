@@ -225,8 +225,8 @@ async def execute_repair(payload: AdminRepairInput):
 
         # Delta_Patching % = (Delta_Area_patch / (Segment Length * Segment Width)) * 100
         delta_patching_pct = (delta_area_patch / seg_total_area) * 100.0
-        # Patching_new = min(100.0, Patching_old + Delta_Patching %)
-        patching_new = min(100.0, patching_old + delta_patching_pct)
+        # Patching Distress Reduction (damaged patches & potholes restored by new repair):
+        patching_new = max(0.0, patching_old * (1.0 - (delta_patching_pct / 100.0)))
 
         # Cracking Reduction:
         # Delta_Cracking % = Delta_Patching % / 1.3
@@ -244,13 +244,12 @@ async def execute_repair(payload: AdminRepairInput):
         # Rutting_new = max(0.0, Rutting_old - Delta_Rutting)
         rutting_new = max(0.0, rutting_old - delta_rutting)
 
-        # IRI Improvement:
-        # Delta_IRI = -(a1 * Delta_Cracking % + a4 * Delta_Rutting) + (a2 * Delta_Patching %)
+        # IRI Improvement (Reduced roughness):
         a1 = 0.005  # IRI_A1
         a4 = 0.003  # IRI_A4
         a2 = 0.002  # IRI_A2
-        delta_iri = -(a1 * delta_cracking_pct + a4 * delta_rutting) + (a2 * delta_patching_pct)
-        # IRI_new = max(1.2, IRI_old + Delta_IRI)
+        delta_iri = -(a1 * delta_cracking_pct + a4 * delta_rutting + a2 * (patching_old - patching_new))
+        # IRI_new = max(1.2, iri_old + delta_iri)
         iri_new = max(1.2, iri_old + delta_iri)
 
         # Recalculate PCI & Road Health Band:
