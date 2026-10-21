@@ -92,12 +92,13 @@ async def get_current_user(
         )
 
     token = credentials.credentials
-    if token in ["demo-admin-token", "demo-token"]:
+    if supabase is None and token in ["demo-admin-token", "demo-user-token", "demo-token"]:
+        is_admin = token == "demo-admin-token"
         return {
-            "id": "demo-admin-id",
-            "email": "admin@digiroad.gov",
-            "full_name": "Demo Administrator",
-            "role": "admin",
+            "id": "demo-admin-id" if is_admin else "demo-user-id",
+            "email": "admin@digiroad.gov" if is_admin else "engineer@digiroad.local",
+            "full_name": "Demo Administrator" if is_admin else "Demo Engineer",
+            "role": "admin" if is_admin else "public",
         }
 
     claims = verify_jwt_token(token)

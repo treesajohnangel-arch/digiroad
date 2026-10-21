@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
-from app.core.authentication import require_admin
+from app.core.authentication import get_current_user, require_admin
 from app.services.supabase_client import supabase
 from app.schemas.complaint import (
     ComplaintStatus,
@@ -35,13 +35,34 @@ def normalize_segment_id(seg_id: str) -> str:
     return clean
 
 
-# In-memory store (empty by default; real complaints come from Supabase user_complaints)
-IN_MEMORY_COMPLAINTS: List[Dict[str, Any]] = []
+# Development-only demo data. Production requests read and write Supabase.
+_now = datetime.now(timezone.utc)
+IN_MEMORY_COMPLAINTS: List[Dict[str, Any]] = [
+    {
+        "complaint_id": "CMP-2418", "segment_id": "MDR47-S01", "complaint_heading": "Pothole",
+        "description": "Deep pothole near the bus stop is forcing two-wheelers into traffic.",
+        "status": "nil", "created_at": _now.isoformat(), "citizen_name": "Anjali Nair",
+        "contact": "••••• 4821", "severity": "High", "repaired_at": None,
+    },
+    {
+        "complaint_id": "CMP-2416", "segment_id": "MDR47-S02", "complaint_heading": "Surface damage",
+        "description": "Loose aggregate and surface wear at the junction approach.",
+        "status": "under process", "created_at": (_now - timedelta(days=1)).isoformat(),
+        "citizen_name": "R. Suresh", "contact": "••••• 7104", "severity": "Medium", "repaired_at": None,
+    },
+    {
+        "complaint_id": "CMP-2397", "segment_id": "MDR47-S03", "complaint_heading": "Drainage",
+        "description": "Water collects along the curb after heavy rain.",
+        "status": "repaired", "created_at": (_now - timedelta(days=9)).isoformat(),
+        "citizen_name": "Meera Das", "contact": "••••• 2360", "severity": "Low",
+        "repair_type": "FULL_RESURFACING", "repaired_at": (_now - timedelta(days=9)).isoformat(),
+    },
+]
 
 
 
 @router.get("", response_model=List[ComplaintResponse])
-async def get_all_complaints():
+async def get_all_complaints(current_user: Dict[str, Any] = Depends(get_current_user)):
     """
     Retrieve all complaints across all statuses (nil, under process, repaired).
     Used by the Admin dashboard and Repaired history.
@@ -57,12 +78,19 @@ async def get_all_complaints():
             records = res.data if res.data is not None else []
             for row in records:
                 row["complaint_id"] = str(row.get("complaint_id"))
-            return records
+            return _redact_complaint_contacts(records, current_user)
         except Exception as e:
             logger.warning(f"Supabase query failed in get_all_complaints: {e}")
-            return []
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Could not load complaints.") from e
 
-    return sorted(IN_MEMORY_COMPLAINTS, key=lambda x: str(x.get("created_at", "")), reverse=True)
+    records = sorted(IN_MEMORY_COMPLAINTS, key=lambda x: str(x.get("created_at", "")), reverse=True)
+    return _redact_complaint_contacts(records, current_user)
+
+
+def _redact_complaint_contacts(records: List[Dict[str, Any]], current_user: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if current_user.get("role") == "admin":
+        return records
+    return [{**row, "citizen_name": None, "contact": None} for row in records]
 
 
 @router.post("/generate", response_model=ComplaintResponse, status_code=status.HTTP_201_CREATED)
@@ -121,6 +149,9 @@ async def generate_complaint(complaint_in: ComplaintCreate):
                 "status": "nil",
                 "created_at": now,
                 "repaired_at": None,
+                "citizen_name": complaint_in.citizen_name,
+                "contact": complaint_in.contact,
+                "severity": complaint_in.severity,
             }
             res = supabase.table("user_complaints").insert(db_payload).execute()
             if res.data and len(res.data) > 0:
@@ -142,13 +173,16 @@ async def generate_complaint(complaint_in: ComplaintCreate):
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Road segment '{complaint_in.segment_id}' is not registered in the system.",
                 )
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Complaint could not be saved to the database.") from e
+
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The database did not return the saved complaint.")
 
     IN_MEMORY_COMPLAINTS.insert(0, fallback_record)
     return fallback_record
 
 
 @router.get("/under-process", response_model=List[ComplaintResponse])
-async def get_under_process_complaints():
+async def get_under_process_complaints(current_user: Dict[str, Any] = Depends(get_current_user)):
     """
     Retrieve all complaints currently under process/investigation.
     Queries Supabase table user_complaints for status = 'under process' or 'UNDER_PROCESS'.
@@ -166,20 +200,21 @@ async def get_under_process_complaints():
             records = res.data if res.data is not None else []
             for row in records:
                 row["complaint_id"] = str(row.get("complaint_id"))
-            return records
+            return _redact_complaint_contacts(records, current_user)
         except Exception as e:
             logger.warning(f"Supabase query failed in get_under_process_complaints: {e}")
-            return []
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Could not load complaints in process.") from e
 
     under_process = [
         c for c in IN_MEMORY_COMPLAINTS
         if str(c.get("status", "")).lower() in ("under process", "under_process", "pending")
     ]
-    return sorted(under_process, key=lambda x: str(x.get("created_at", "")), reverse=True)
+    records = sorted(under_process, key=lambda x: str(x.get("created_at", "")), reverse=True)
+    return _redact_complaint_contacts(records, current_user)
 
 
 @router.patch("/{complaint_id}/under-process", response_model=ComplaintResponse)
-async def mark_complaint_under_process(complaint_id: str):
+async def mark_complaint_under_process(complaint_id: str, _admin: Dict[str, Any] = Depends(require_admin)):
     """
     Admin updates a complaint from status 'nil' to 'under process'.
     Once marked as under process, it appears on the Home page under the 'under process' section.
@@ -193,21 +228,26 @@ async def mark_complaint_under_process(complaint_id: str):
                 supabase.table("user_complaints")
                 .update({"status": "under process"})
                 .eq("complaint_id", db_id)
+                .eq("status", "nil")
                 .execute()
             )
             if res.data and len(res.data) > 0:
                 updated_record = res.data[0]
                 updated_record["complaint_id"] = str(updated_record.get("complaint_id"))
             else:
-                check = supabase.table("user_complaints").select("*").eq("complaint_id", db_id).execute()
-                if check.data and len(check.data) > 0:
-                    updated_record = check.data[0]
-                    updated_record["complaint_id"] = str(updated_record.get("complaint_id"))
-                    updated_record["status"] = "under process"
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only a new complaint can be moved to under process.")
         except Exception as e:
+            if isinstance(e, HTTPException):
+                raise
             logger.warning(f"Supabase update error for complaint under-process {complaint_id}: {e}")
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Could not update complaint status in the database.") from e
 
-    # Synchronize in-memory fallback
+    if supabase is not None:
+        if updated_record is not None:
+            return updated_record
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Complaint with ID '{complaint_id}' not found.")
+
+    # Synchronize in-memory development data
     for comp in IN_MEMORY_COMPLAINTS:
         if str(comp.get("complaint_id")) == complaint_id or str(comp.get("id")) == complaint_id:
             comp["status"] = "under process"
@@ -225,7 +265,7 @@ async def mark_complaint_under_process(complaint_id: str):
 
 
 @router.get("/repaired", response_model=List[ComplaintResponse])
-async def get_repaired_complaints():
+async def get_repaired_complaints(current_user: Dict[str, Any] = Depends(get_current_user)):
     """
     Retrieve all resolved / repaired complaints.
     Queries Supabase table user_complaints for status = 'REPAIRED' ordered by repaired_at desc.
@@ -244,16 +284,17 @@ async def get_repaired_complaints():
             records = res.data if res.data is not None else []
             for row in records:
                 row["complaint_id"] = str(row.get("complaint_id"))
-            return records
+            return _redact_complaint_contacts(records, current_user)
         except Exception as e:
             logger.warning(f"Supabase query failed in get_repaired_complaints: {e}")
-            return []
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Could not load repaired complaints.") from e
 
     repaired = [
         c for c in IN_MEMORY_COMPLAINTS
         if str(c.get("status", "")).lower() == "repaired"
     ]
-    return sorted(repaired, key=lambda x: str(x.get("repaired_at") or x.get("created_at") or ""), reverse=True)
+    records = sorted(repaired, key=lambda x: str(x.get("repaired_at") or x.get("created_at") or ""), reverse=True)
+    return _redact_complaint_contacts(records, current_user)
 
 
 def _repaired_age_bucket(records: List[Dict[str, Any]], *, archived: bool) -> List[Dict[str, Any]]:
@@ -288,20 +329,20 @@ async def _load_repaired_complaints() -> List[Dict[str, Any]]:
             return res.data or []
         except Exception as e:
             logger.warning(f"Supabase query failed loading repaired complaints: {e}")
-            return []
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Could not load repaired complaints.") from e
     return [c for c in IN_MEMORY_COMPLAINTS if str(c.get("status", "")).lower() == "repaired"]
 
 
 @router.get("/repaired/recent", response_model=List[ComplaintResponse])
-async def get_recent_repaired_complaints():
+async def get_recent_repaired_complaints(current_user: Dict[str, Any] = Depends(get_current_user)):
     """Repaired complaints completed within the last seven days, for Home."""
-    return _repaired_age_bucket(await _load_repaired_complaints(), archived=False)
+    return _redact_complaint_contacts(_repaired_age_bucket(await _load_repaired_complaints(), archived=False), current_user)
 
 
 @router.get("/repaired/history", response_model=List[ComplaintResponse])
-async def get_repaired_complaint_history():
+async def get_repaired_complaint_history(current_user: Dict[str, Any] = Depends(get_current_user)):
     """Repaired complaints completed more than seven days ago, for the archive."""
-    return _repaired_age_bucket(await _load_repaired_complaints(), archived=True)
+    return _redact_complaint_contacts(_repaired_age_bucket(await _load_repaired_complaints(), archived=True), current_user)
 
 
 @router.patch(
@@ -310,59 +351,7 @@ async def get_repaired_complaint_history():
     dependencies=[Depends(require_admin)],
 )
 async def complete_complaint(complaint_id: str):
-    """
-    Admin Action Endpoint (requires an admin bearer token):
-    - Updates the record in Supabase table user_complaints matching complaint_id:
-      - Sets status = 'REPAIRED'
-      - Sets repaired_at = current UTC ISO timestamp
-    - Returns the updated complaint record (or 404 if complaint_id not found).
-    """
-    now = datetime.now(timezone.utc).isoformat()
-    updated_record: Optional[Dict[str, Any]] = None
-
-    if supabase is not None:
-        try:
-            db_id = int(complaint_id) if complaint_id.isdigit() else complaint_id
-            res = (
-                supabase.table("user_complaints")
-                .update({
-                    "status": "REPAIRED",
-                    "repaired_at": now,
-                })
-                .eq("complaint_id", db_id)
-                .execute()
-            )
-            if res.data and len(res.data) > 0:
-                updated_record = res.data[0]
-                updated_record["complaint_id"] = str(updated_record.get("complaint_id"))
-            else:
-                check = supabase.table("user_complaints").select("*").eq("complaint_id", db_id).execute()
-                if check.data and len(check.data) > 0:
-                    updated_record = check.data[0]
-                    updated_record["complaint_id"] = str(updated_record.get("complaint_id"))
-                    updated_record["status"] = "REPAIRED"
-                    updated_record["repaired_at"] = now
-        except Exception as e:
-            logger.warning(f"Supabase update error for complaint {complaint_id}: {e}")
-
-    # Synchronize in-memory fallback list
-    found_in_memory = False
-    for comp in IN_MEMORY_COMPLAINTS:
-        if str(comp.get("complaint_id")) == complaint_id or str(comp.get("id")) == complaint_id:
-            comp["status"] = "REPAIRED"
-            comp["repaired_at"] = now
-            found_in_memory = True
-            if updated_record is None:
-                updated_record = comp
-            break
-
-    if updated_record is not None:
-        if not found_in_memory:
-            IN_MEMORY_COMPLAINTS.insert(0, updated_record)
-        return updated_record
-
-    # If neither Supabase nor in-memory store found the complaint -> 404 Not Found
     raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Complaint with ID '{complaint_id}' not found.",
+        status_code=status.HTTP_409_CONFLICT,
+        detail="A complaint cannot be marked repaired without recording its repair. Use the admin repair action with PATCHING or FULL_RESURFACING.",
     )
