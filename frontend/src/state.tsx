@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
 export type Health = 'Very Poor' | 'Poor' | 'Fair' | 'Good';
 
@@ -50,6 +50,8 @@ export function normalizeStatus(st?: string | null): 'nil' | 'Under Progress' | 
   return 'nil';
 }
 
+export const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+
 function fromApiComplaint(row: ApiComplaint): Complaint {
   return {
     id: String(row.complaint_id),
@@ -62,7 +64,8 @@ function fromApiComplaint(row: ApiComplaint): Complaint {
     status: normalizeStatus(row.status),
     created: row.created_at ? new Date(row.created_at).toLocaleString() : '—',
     repairedAt: row.repaired_at || undefined,
-    repairType: row.repair_type === 'PATCHING' || row.repair_type === 'FULL_RESURFACING' ? row.repair_type : undefined,
+    repairType: ['PATCHING', 'FULL_RESURFACING'].includes(String(row.repair_type || '').toUpperCase())
+      ? String(row.repair_type).toUpperCase() as Complaint['repairType'] : undefined,
   };
 }
 
@@ -177,18 +180,18 @@ export function classifyHealth(pci: number): Health {
 
 type AppState = {
   role: 'public' | 'admin';
-  setRole: (r: 'public' | 'admin') => void;
   user: { name: string; email: string };
   authToken: string | null;
   loggedIn: boolean;
-  login: (name: string, email: string, token?: string) => void;
+  login: (name: string, email: string, token: string, role: 'public' | 'admin') => void;
   logout: () => void;
-  users: string[];
-  signup: (name: string, email: string, password: string) => boolean;
   segments: Segment[];
   setSegments: React.Dispatch<React.SetStateAction<Segment[]>>;
   complaints: Complaint[];
-  addComplaint: (c: Omit<Complaint, 'id' | 'status' | 'created'>) => Promise<void>;
+  recentRepairIds: string[];
+  archivedRepairIds: string[];
+  refreshRepairBuckets: () => Promise<void>;
+  addComplaint: (c: Omit<Complaint, 'id' | 'status' | 'created'>) => Promise<boolean>;
   markUnderProcess: (id: string) => Promise<boolean>;
   repair: (id: string) => void;
   executeRepair: (payload: RepairActionPayload) => Promise<boolean>;
@@ -200,25 +203,55 @@ type AppState = {
 const Ctx = createContext<AppState | null>(null);
 
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
-  const [role, setRole] = useState<'public' | 'admin'>('admin');
-  const [user, setUser] = useState({ name: 'Demo Administrator', email: 'admin@digiroad.gov' });
-  const [authToken, setAuthToken] = useState<string | null>('demo-admin-token');
-  const [loggedIn, setLoggedIn] = useState(true);
-  const [users, setUsers] = useState(['engineer@digiroad.local', 'admin@digiroad.gov']);
+  const [role, setRole] = useState<'public' | 'admin'>(() => window.sessionStorage.getItem('digiroad-role') === 'admin' ? 'admin' : 'public');
+  const [user, setUser] = useState(() => {
+    try { return JSON.parse(window.sessionStorage.getItem('digiroad-user') || '{"name":"","email":""}'); }
+    catch { return { name: '', email: '' }; }
+  });
+  const [authToken, setAuthToken] = useState<string | null>(() => window.sessionStorage.getItem('digiroad-token'));
+  const [loggedIn, setLoggedIn] = useState(() => Boolean(window.sessionStorage.getItem('digiroad-token')));
   const [segmentsList, setSegmentsList] = useState<Segment[]>(defaultSegments);
   const [complaints, setComplaints] = useState<Complaint[]>(seed);
+  const [recentRepairIds, setRecentRepairIds] = useState<string[]>([]);
+  const [archivedRepairIds, setArchivedRepairIds] = useState<string[]>(seed.filter(c => c.status === 'Repaired').map(c => c.id));
   const [trendLogs, setTrendLogs] = useState<Record<string, TrendPoint[]>>({});
   const [toast, setToast] = useState('');
 
+  const refreshRepairBuckets = useCallback(async () => {
+    if (!authToken) return;
+    const headers = { Authorization: `Bearer ${authToken}` };
+    try {
+      const [recentRes, historyRes] = await Promise.all([
+        fetch(`${API_BASE}/api/complaints/repaired/recent`, { headers }),
+        fetch(`${API_BASE}/api/complaints/repaired/history`, { headers }),
+      ]);
+      if (!recentRes.ok || !historyRes.ok) throw new Error('Could not load repair history');
+      const [recentRows, historyRows] = await Promise.all([recentRes.json(), historyRes.json()]) as [ApiComplaint[], ApiComplaint[]];
+      const recent = recentRows.map(fromApiComplaint);
+      const history = historyRows.map(fromApiComplaint);
+      setRecentRepairIds(recent.map(c => c.id));
+      setArchivedRepairIds(history.map(c => c.id));
+      setComplaints(prev => {
+        const byId = new Map(prev.map(c => [c.id, c]));
+        [...recent, ...history].forEach(c => byId.set(c.id, c));
+        return [...byId.values()];
+      });
+    } catch (error) {
+      console.warn('Repair history refresh failed:', error);
+    }
+  }, [authToken]);
+
   useEffect(() => {
+    if (!authToken || !loggedIn) return;
     let alive = true;
+    const headers = { Authorization: `Bearer ${authToken}` };
     Promise.all([
-      fetch('/api/complaints').then(res => (res.ok ? res.json() : null)),
-      fetch('/api/home/map-data').then(res => (res.ok ? res.json() : null)),
+      fetch(`${API_BASE}/api/complaints`, { headers }).then(res => (res.ok ? res.json() : null)),
+      fetch(`${API_BASE}/api/home/map-data`).then(res => (res.ok ? res.json() : null)),
     ])
       .then(([apiComplaints, mapData]) => {
         if (!alive) return;
-        if (Array.isArray(apiComplaints) && apiComplaints.length > 0) {
+        if (Array.isArray(apiComplaints)) {
           const apiRows = (apiComplaints as ApiComplaint[]).map(fromApiComplaint);
           setComplaints(apiRows);
         }
@@ -244,10 +277,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         }
       })
       .catch(() => {});
+    void refreshRepairBuckets();
     return () => {
       alive = false;
     };
-  }, []);
+  }, [authToken, loggedIn, refreshRepairBuckets]);
 
   const notify = (s: string) => {
     setToast(s);
@@ -256,8 +290,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   const markUnderProcess = async (id: string): Promise<boolean> => {
     try {
-      const res = await fetch(`/api/complaints/${encodeURIComponent(id)}/under-process`, {
+      const res = await fetch(`${API_BASE}/api/complaints/${encodeURIComponent(id)}/under-process`, {
         method: 'PATCH',
+        headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined,
       });
       if (res.ok) {
         setComplaints(prev =>
@@ -266,19 +301,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         notify(`Complaint #${id} updated to Under Process · Now active on Home`);
         return true;
       }
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `Status update failed (${res.status})`);
     } catch (err) {
-      console.warn('API update under-process failed, applying locally:', err);
+      notify(err instanceof Error ? err.message : 'Could not update complaint status.');
+      return false;
     }
-    setComplaints(prev =>
-      prev.map(c => (c.id === id ? { ...c, status: 'Under Progress' } : c))
-    );
-    notify(`Complaint #${id} updated to Under Process · Now active on Home`);
-    return true;
   };
 
-  const addComplaint = async (form: Omit<Complaint, 'id' | 'status' | 'created'>) => {
+  const addComplaint = async (form: Omit<Complaint, 'id' | 'status' | 'created'>): Promise<boolean> => {
     try {
-      const res = await fetch('/api/complaints/generate', {
+      const res = await fetch(`${API_BASE}/api/complaints/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -299,25 +332,23 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         newC.status = 'nil';
         setComplaints(prev => [newC, ...prev]);
         notify('Complaint submitted with status nil · Awaiting admin review');
-        return;
+        return true;
       }
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `Complaint submission failed (${res.status})`);
     } catch (err) {
-      console.warn('API generate complaint failed, storing locally:', err);
+      notify(err instanceof Error ? err.message : 'Complaint could not be saved.');
+      return false;
     }
-
-    const fallbackC: Complaint = {
-      ...form,
-      id: `CMP-${Math.floor(2400 + Math.random() * 500)}`,
-      status: 'nil',
-      created: 'Just now',
-    };
-    setComplaints(prev => [fallbackC, ...prev]);
-    notify('Complaint submitted with status nil · Awaiting admin review');
   };
 
   const executeRepair = async (payload: RepairActionPayload): Promise<boolean> => {
     const comp = complaints.find(c => c.id === payload.complaintId);
-    const targetSegment = segmentsList.find(s => s.id === comp?.segmentId) || segmentsList[0];
+    const targetSegment = segmentsList.find(s => s.id === comp?.segmentId);
+    if (!comp || !targetSegment) {
+      notify('Repair was not saved: complaint or road segment could not be found.');
+      return false;
+    }
 
     let newPci = 100;
     let newHealth: Health = 'Good';
@@ -327,8 +358,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     let newPatching = 0.0;
     let newIri = 1.2;
 
-    // Try calling backend API
-    let apiSuccess = false;
+    let repairTimestamp: string | undefined;
+    let databasePersisted = false;
     try {
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
@@ -337,7 +368,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         headers['Authorization'] = `Bearer ${authToken}`;
       }
 
-      const res = await fetch('/api/admin/repair', {
+      const res = await fetch(`${API_BASE}/api/admin/repair`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -352,6 +383,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
       if (res.ok) {
         const data = await res.json();
+        databasePersisted = data.database_persisted === true;
         const m = data.segment_metrics;
         if (m) {
           newPci = Math.round(m.pci_score);
@@ -361,54 +393,23 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           newRutting = m.rut_depth_mm;
           newPatching = m.patching_pct;
           newIri = m.iri_m_km;
-          apiSuccess = true;
+          repairTimestamp = data.updated_at;
+        } else {
+          throw new Error('Repair response did not include updated road metrics.');
         }
+      } else {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Repair request failed (${res.status}).`);
       }
-    } catch {
-      apiSuccess = false;
+    } catch (error) {
+      console.error('Repair API failed:', error);
+      notify(error instanceof Error ? error.message : 'Repair could not be saved.');
+      return false;
     }
 
-    // Deterministic formula calculation reducing cracking, rutting, patching, and IRI
-    if (!apiSuccess) {
-      if (payload.repairType === 'PATCHING') {
-        const pLen = payload.patchLength || 10.0;
-        const pWid = payload.patchWidth || 3.0;
-        const deltaArea = pLen * pWid;
-        const totalArea = 1000.0 * 7.0; // Standard 1km x 7m carriageway
-        const deltaPatchingPct = (deltaArea / totalArea) * 100.0;
-
-        // Patching distress is restored and reduced
-        newPatching = Math.max(0.0, targetSegment.patching * (1.0 - deltaPatchingPct / 100.0));
-        const deltaCrackingPct = deltaPatchingPct / 1.3;
-        newCracking = Math.max(0.0, targetSegment.cracking - deltaCrackingPct);
-        newRaveling = Math.max(0.0, targetSegment.raveling * (1.0 - deltaPatchingPct / 100.0));
-        const deltaRutting = targetSegment.rutting * (0.8 * (deltaPatchingPct / 100.0));
-        newRutting = Math.max(0.0, targetSegment.rutting - deltaRutting);
-
-        const a1 = 0.005;
-        const a4 = 0.003;
-        const a2 = 0.002;
-        const deltaIri = -(a1 * deltaCrackingPct + a4 * deltaRutting + a2 * (targetSegment.patching - newPatching));
-        newIri = Math.max(1.2, targetSegment.iri + deltaIri);
-
-        const deduct =
-          newCracking * 0.4 +
-          newRaveling * 0.3 +
-          newRutting * 1.5 +
-          newPatching * 0.2 +
-          (newIri - 1.2) * 8.0;
-
-        newPci = Math.round(Math.max(0, Math.min(100, 100 - deduct)));
-        newHealth = classifyHealth(newPci);
-      } else {
-        newCracking = 0.0;
-        newRaveling = 0.0;
-        newRutting = 0.0;
-        newPatching = 0.0;
-        newIri = 1.2;
-        newPci = 100;
-        newHealth = 'Good';
-      }
+    if (!repairTimestamp) {
+      notify('Repair was not saved: the server returned no repair timestamp.');
+      return false;
     }
 
     // 1. Update segment in state instantly
@@ -438,7 +439,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             ...c,
             status: 'Repaired',
             repairType: payload.repairType,
-            repairedAt: new Date().toISOString(),
+            repairedAt: repairTimestamp,
           };
         }
         return c;
@@ -461,8 +462,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       [targetSegment.id]: [...(prev[targetSegment.id] || []), logItem],
     }));
 
+    await refreshRepairBuckets();
+
     const actionText = payload.repairType === 'PATCHING' ? 'Patching completed' : 'Full resurfacing completed';
-    notify(`${actionText} for ${targetSegment.name} · New PCI: ${newPci} (${newHealth})`);
+    notify(`${actionText} for ${targetSegment.name} · New PCI: ${newPci} (${newHealth})${databasePersisted ? '' : ' · development memory only'}`);
     return true;
   };
 
@@ -473,30 +476,32 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo<AppState>(
     () => ({
       role,
-      setRole,
       user,
       authToken,
       loggedIn,
-      login: (name, email, token) => {
+      login: (name, email, token, assignedRole) => {
         setUser({ name, email });
-        if (token) setAuthToken(token);
+        setAuthToken(token);
+        setRole(assignedRole);
+        window.sessionStorage.setItem('digiroad-user', JSON.stringify({ name, email }));
+        window.sessionStorage.setItem('digiroad-role', assignedRole);
+        window.sessionStorage.setItem('digiroad-token', token);
         setLoggedIn(true);
       },
       logout: () => {
         setLoggedIn(false);
         setAuthToken(null);
-      },
-      users,
-      signup: (name, email, _password) => {
-        if (users.includes(email.toLowerCase())) return false;
-        setUsers(v => [...v, email.toLowerCase()]);
-        setUser({ name, email });
-        setLoggedIn(true);
-        return true;
+        setRole('public');
+        window.sessionStorage.removeItem('digiroad-token');
+        window.sessionStorage.removeItem('digiroad-role');
+        window.sessionStorage.removeItem('digiroad-user');
       },
       segments: segmentsList,
       setSegments: setSegmentsList,
       complaints,
+      recentRepairIds,
+      archivedRepairIds,
+      refreshRepairBuckets,
       addComplaint,
       markUnderProcess,
       repair,
@@ -505,7 +510,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       toast,
       notify,
     }),
-    [role, user, authToken, loggedIn, users, segmentsList, complaints, trendLogs, toast]
+    [role, user, authToken, loggedIn, segmentsList, complaints, recentRepairIds, archivedRepairIds, refreshRepairBuckets, trendLogs, toast]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

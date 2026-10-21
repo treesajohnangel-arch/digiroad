@@ -40,14 +40,9 @@ import {
   YAxis,
 } from 'recharts';
 import { MapContainer, TileLayer, Polyline, ZoomControl, useMap } from 'react-leaflet';
-import { Complaint, Health, Segment, useApp } from './state';
+import { API_BASE, Complaint, Health, Segment, useApp } from './state';
 
 const hc = (h: Health) => h.toLowerCase().replace(' ', '-');
-const isRecentRepair = (complaint: Complaint) => {
-  if (complaint.status !== 'Repaired') return false;
-  const timestamp = complaint.repairedAt ? Date.parse(complaint.repairedAt) : Date.parse(complaint.created);
-  return Number.isFinite(timestamp) && Date.now() - timestamp <= 7 * 24 * 60 * 60 * 1000;
-};
 const color = (h: Health) =>
   ({
     'Very Poor': '#800000',
@@ -99,7 +94,7 @@ function LogoMark() {
 }
 
 function Login() {
-  const { login, signup, users } = useApp();
+  const { login } = useApp();
   const nav = useNavigate();
   const [tab, T] = useState<'login' | 'signup'>('login');
   const [name, N] = useState('');
@@ -120,39 +115,35 @@ function Login() {
     return () => window.clearTimeout(timer);
   }, []);
 
-  function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
     Xe('');
-    if (tab === 'signup') {
-      if (password !== confirm) {
-        Xe('Passwords do not match.');
-        return;
-      }
-      if (users.includes(email.toLowerCase())) {
-        window.alert('An account with this email ID already exists. Please login instead.');
-        return;
-      }
+    if (tab === 'signup' && password !== confirm) {
+      Xe('Passwords do not match.');
+      return;
     }
     B(true);
-    setTimeout(() => {
-      if (tab === 'login' && !users.includes(email.toLowerCase())) {
-        Xe('No demo account found. Try admin@digiroad.gov or engineer@digiroad.local.');
-        B(false);
-        return;
-      }
-      if (tab === 'signup') {
-        if (!signup(name, email, password)) {
-          window.alert('An account with this email ID already exists. Please login instead.');
-          B(false);
-          return;
-        }
-        login(name, email);
-      } else {
-        login(email.includes('admin') ? 'Demo Administrator' : 'Demo Engineer', email);
-      }
+    try {
+      const endpoint = tab === 'signup' ? 'signup' : 'login';
+      const payload = tab === 'signup'
+        ? { email, password, full_name: name }
+        : { email, password };
+      const res = await fetch(`${API_BASE}/api/auth/${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || 'Authentication failed.');
+      if (!data.access_token) throw new Error('The server did not return an access token.');
+      const profileName = data.user?.full_name || name || email;
+      login(profileName, data.user?.email || email, data.access_token, data.role === 'admin' ? 'admin' : 'public');
       nav('/home');
+    } catch (err) {
+      Xe(err instanceof Error ? err.message : 'Authentication failed. Please try again.');
+    } finally {
       B(false);
-    }, 350);
+    }
   }
 
   return (
@@ -258,7 +249,7 @@ function Login() {
 }
 
 function Shell() {
-  const { role, setRole, user, logout, toast, segments } = useApp();
+  const { role, user, logout, toast, segments } = useApp();
   const [mobile, M] = useState(false);
   const nav = useNavigate();
   const location = useLocation();
@@ -354,10 +345,6 @@ function Shell() {
               <Search size={15} /> Search segments <kbd><Command size={11} /> K</kbd>
             </button>
             <i className="divider" />
-            <small>ROLE</small>
-            <button className={`switch ${role === 'admin' ? 'on' : ''}`} onClick={() => setRole(role === 'admin' ? 'public' : 'admin')}>
-              <i />
-            </button>
             <span className={`role ${role}`}>{role}</span>
             <i className="divider" />
             <span className="avatar small">{user.name[0]}</span>
@@ -426,7 +413,7 @@ function HealthTag({ h }: { h: Health }) {
 }
 
 function Home() {
-  const { complaints, addComplaint, segments } = useApp();
+  const { complaints, addComplaint, segments, recentRepairIds, refreshRepairBuckets } = useApp();
   const [selected, Sel] = useState<Segment | null>(null);
   const [query, Q] = useState('');
   const [modal, Modal] = useState(false);
@@ -435,7 +422,8 @@ function Home() {
   const [selectedComplaint, setSelectedComplaint] = useState<Complaint | null>(null);
 
   const under = complaints.filter(c => c.status === 'Under Progress');
-  const done = complaints.filter(isRecentRepair);
+  React.useEffect(() => { void refreshRepairBuckets(); }, [refreshRepairBuckets]);
+  const done = complaints.filter(c => c.status === 'Repaired' && recentRepairIds.includes(c.id));
   const results = segments.filter(
     s => s.name.toLowerCase().includes(query.toLowerCase()) || s.id.toLowerCase().includes(query.toLowerCase())
   );
@@ -763,7 +751,7 @@ function ComplaintModal({
   submit,
 }: {
   close: () => void;
-  submit: (c: Omit<Complaint, 'id' | 'status' | 'created'>) => void;
+  submit: (c: Omit<Complaint, 'id' | 'status' | 'created'>) => Promise<boolean>;
 }) {
   const { segments } = useApp();
   const [form, F] = useState({
@@ -779,10 +767,9 @@ function ComplaintModal({
     F(f => ({ ...f, [k]: v }));
   }
 
-  function send(e: React.FormEvent) {
+  async function send(e: React.FormEvent) {
     e.preventDefault();
-    submit(form);
-    close();
+    if (await submit(form)) close();
   }
 
   return (
@@ -1192,13 +1179,14 @@ function Trends() {
 }
 
 function RepairHistory() {
-  const { complaints, segments } = useApp();
+  const { complaints, segments, archivedRepairIds, refreshRepairBuckets } = useApp();
   const [selectedComplaint, setSelectedComplaint] = useState<Complaint | null>(null);
   const [filterSegment, setFilterSegment] = useState<string>('all');
   const [viewTab, setViewTab] = useState<'archived' | 'all'>('archived');
 
   const allRepaired = complaints.filter(c => c.status === 'Repaired');
-  const archived = allRepaired.filter(c => !isRecentRepair(c));
+  React.useEffect(() => { void refreshRepairBuckets(); }, [refreshRepairBuckets]);
+  const archived = allRepaired.filter(c => archivedRepairIds.includes(c.id));
 
   const baseList = viewTab === 'archived' ? archived : allRepaired;
   const filtered = filterSegment === 'all'
@@ -1348,25 +1336,25 @@ function Admin() {
     }
 
     setSubmitting(true);
-    await executeRepair({
+    const saved = await executeRepair({
       complaintId: patchModalComplaint.id,
       repairType: 'PATCHING',
       patchLength: len,
       patchWidth: wid,
     });
     setSubmitting(false);
-    setPatchModalComplaint(null);
+    if (saved) setPatchModalComplaint(null);
   }
 
   async function handleResurfaceConfirm() {
     if (!resurfaceModalComplaint) return;
     setSubmitting(true);
-    await executeRepair({
+    const saved = await executeRepair({
       complaintId: resurfaceModalComplaint.id,
       repairType: 'FULL_RESURFACING',
     });
     setSubmitting(false);
-    setResurfaceModalComplaint(null);
+    if (saved) setResurfaceModalComplaint(null);
   }
 
   return (
