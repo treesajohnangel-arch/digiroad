@@ -50,7 +50,11 @@ export function normalizeStatus(st?: string | null): 'nil' | 'Under Progress' | 
   return 'nil';
 }
 
-export const API_BASE = (import.meta.env.VITE_API_URL || 'https://digiroad-production.up.railway.app').replace(/\/+$/, '');
+export const API_BASE = (
+  import.meta.env.VITE_API_BASE_URL ||
+  import.meta.env.VITE_API_URL ||
+  'https://digiroad-2.onrender.com'
+).replace(/\/+$/, '');
 
 function fromApiComplaint(row: ApiComplaint): Complaint {
   return {
