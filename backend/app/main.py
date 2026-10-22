@@ -35,10 +35,24 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Configure CORS Middleware (allowing all origins for local/development use)
+# Configure CORS Middleware
+allowed_origins = [
+    "https://digiroad-frontend.onrender.com",
+    "https://digiroad-1.onrender.com",
+    "https://digiroad-2.onrender.com",
+    "https://digiroad-production.up.railway.app",
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:8000",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
+    allow_origin_regex=r"https://.*\.onrender\.com",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
