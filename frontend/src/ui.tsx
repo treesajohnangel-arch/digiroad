@@ -44,12 +44,12 @@ import { API_BASE, Complaint, Health, Segment, useApp } from './state';
 
 const hc = (h: Health) => h.toLowerCase().replace(' ', '-');
 const color = (h: Health) =>
-  ({
-    'Very Poor': '#800000',
-    Poor: '#DC2626',
-    Fair: '#D97706',
-    Good: '#16A34A',
-  }[h] || '#16A34A');
+({
+  'Very Poor': '#800000',
+  Poor: '#DC2626',
+  Fair: '#D97706',
+  Good: '#16A34A',
+}[h] || '#16A34A');
 
 function App() {
   const { loggedIn } = useApp();
