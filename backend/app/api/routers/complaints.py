@@ -35,29 +35,8 @@ def normalize_segment_id(seg_id: str) -> str:
     return clean
 
 
-# Development-only demo data. Production requests read and write Supabase.
-_now = datetime.now(timezone.utc)
-IN_MEMORY_COMPLAINTS: List[Dict[str, Any]] = [
-    {
-        "complaint_id": "CMP-2418", "segment_id": "MDR47-S01", "complaint_heading": "Pothole",
-        "description": "Deep pothole near the bus stop is forcing two-wheelers into traffic.",
-        "status": "nil", "created_at": _now.isoformat(), "citizen_name": "Anjali Nair",
-        "contact": "••••• 4821", "severity": "High", "repaired_at": None,
-    },
-    {
-        "complaint_id": "CMP-2416", "segment_id": "MDR47-S02", "complaint_heading": "Surface damage",
-        "description": "Loose aggregate and surface wear at the junction approach.",
-        "status": "under process", "created_at": (_now - timedelta(days=1)).isoformat(),
-        "citizen_name": "R. Suresh", "contact": "••••• 7104", "severity": "Medium", "repaired_at": None,
-    },
-    {
-        "complaint_id": "CMP-2397", "segment_id": "MDR47-S03", "complaint_heading": "Drainage",
-        "description": "Water collects along the curb after heavy rain.",
-        "status": "repaired", "created_at": (_now - timedelta(days=9)).isoformat(),
-        "citizen_name": "Meera Das", "contact": "••••• 2360", "severity": "Low",
-        "repair_type": "FULL_RESURFACING", "repaired_at": (_now - timedelta(days=9)).isoformat(),
-    },
-]
+# In-memory fallback store, used only when Supabase is unavailable. Starts empty.
+IN_MEMORY_COMPLAINTS: List[Dict[str, Any]] = []
 
 
 
