@@ -153,39 +153,38 @@ function Login() {
           <div className="brand-intro-lockup"><LogoMark /><b>DIGIROAD</b></div>
         </div>
       )}
-      <RoadBackdrop />
-      <header className="site-head">
-        <div className="site-title">
-          <small>PAVEMENT INTELLIGENCE · MDR47 CORRIDOR</small>
-          <span className="site-name">DIGIROAD</span>
+      <section className="login-visual" style={{ backgroundImage: `url(${PHOTOS.ghat})` }}>
+        <span className="era-logo">DigiRoad</span>
+        <div className="login-visual-copy">
+          <small className="caption">Thiruvananthapuram · Kerala</small>
+          <h1>
+            Every road,
+            <br />
+            <em>read closely.</em>
+          </h1>
+          <p>Pavement condition, decay forecasts and citizen repair reports for the MDR47 corridor, in one place.</p>
         </div>
-        <nav className="site-nav" aria-label="Account">
-          {(['login', 'signup'] as const).map(t => (
-            <button
-              key={t}
-              className={tab === t ? 'active' : ''}
-              onClick={() => {
-                T(t);
-                Xe('');
-              }}
-            >
-              {t === 'login' ? 'Log in' : 'Sign up'}
-            </button>
-          ))}
-        </nav>
-      </header>
-      <section className="login-hero">
-        <h1>
-          See the road
-          <br />
-          beneath the road.
-        </h1>
-        <p>Street-level condition intelligence for the people who keep Kerala's roads moving.</p>
       </section>
       <section className="login-right">
         <div className="auth">
+          <small className="caption">Road health workspace</small>
           <h2>{tab === 'login' ? 'Welcome back' : 'Create an account'}</h2>
           <p>{tab === 'login' ? 'Sign in to continue to your workspace.' : 'Join the municipal road health workspace.'}</p>
+          <div className="tabs">
+            {(['login', 'signup'] as const).map(t => (
+              <button
+                key={t}
+                type="button"
+                className={tab === t ? 'active' : ''}
+                onClick={() => {
+                  T(t);
+                  Xe('');
+                }}
+              >
+                {t === 'login' ? 'Log in' : 'Sign up'}
+              </button>
+            ))}
+          </div>
           <form onSubmit={submit}>
             {tab === 'signup' && (
               <label>
@@ -233,53 +232,58 @@ function Login() {
           </form>
         </div>
       </section>
-      <SiteInfo index={`ROAD HEALTH WORKSPACE ${new Date().getFullYear()}`} />
     </main>
   );
 }
 
-// Kerala road photos in public/bg, crossfaded behind every page.
-const ROAD_PHOTOS = Array.from({ length: 10 }, (_, i) => `/bg/road-${String(i + 1).padStart(2, '0')}.jpg`);
+// Kerala road photography in public/img.
+const PHOTOS = {
+  hill: '/img/hill-road.jpg',
+  night: '/img/night-flyover.jpg',
+  ghat: '/img/ghat-road.jpg',
+  avenue: '/img/tree-avenue.jpg',
+  flood: '/img/flooded-road.jpg',
+};
 
-function RoadBackdrop() {
-  const [active, setActive] = useState(0);
+const NAV_LINKS: [string, string][] = [
+  ['/home', 'Overview'],
+  ['/simulations', 'Simulations'],
+  ['/trends', 'Trends'],
+  ['/repaired', 'Repairs'],
+  ['/admin', 'Admin'],
+];
+
+// Fades and lifts any [data-reveal] element into view once, as it scrolls in.
+function useReveal(deps: unknown[]) {
   useEffect(() => {
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    const timer = window.setInterval(() => setActive(i => (i + 1) % ROAD_PHOTOS.length), 7000);
-    return () => window.clearInterval(timer);
-  }, []);
-  return (
-    <div className="road-backdrop" aria-hidden="true">
-      {ROAD_PHOTOS.map((src, i) => (
-        <div key={src} className={`road-photo ${i === active ? 'on' : ''}`} style={{ backgroundImage: `url(${src})` }} />
-      ))}
-      <div className="road-veil" />
-    </div>
-  );
-}
-
-function SiteInfo({ index }: { index: string }) {
-  return (
-    <footer className="site-info">
-      <div>
-        <small>BASE</small>
-        <b>THIRUVANANTHAPURAM, KERALA</b>
-      </div>
-      <div>
-        <small>FOCUS</small>
-        <b>PAVEMENT CONDITION / REPAIR PLANNING / CITIZEN REPORTS</b>
-      </div>
-      <div>
-        <small>INDEX</small>
-        <b>{index}</b>
-      </div>
-    </footer>
-  );
+    const els = Array.from(document.querySelectorAll<HTMLElement>('[data-reveal]:not(.in)'));
+    if (!('IntersectionObserver' in window)) {
+      els.forEach(el => el.classList.add('in'));
+      return;
+    }
+    const io = new IntersectionObserver(
+      entries => entries.forEach(e => {
+        if (e.isIntersecting) {
+          e.target.classList.add('in');
+          io.unobserve(e.target);
+        }
+      }),
+      { threshold: 0.12 }
+    );
+    els.forEach(el => io.observe(el));
+    return () => io.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
 }
 
 function Shell() {
   const { role, user, logout, toast, segments } = useApp();
   const nav = useNavigate();
+  const location = useLocation();
+  const [menu, setMenu] = useState(false);
+  const onHome = location.pathname === '/home';
+  useReveal([location.pathname, segments.length]);
+  useEffect(() => setMenu(false), [location.pathname]);
 
   const avgPci = useMemo(() => {
     if (!segments.length) return 0;
@@ -287,39 +291,42 @@ function Shell() {
     return (sum / segments.length).toFixed(1);
   }, [segments]);
 
-  const links: [string, string][] = [
-    ['/home', 'Home'],
-    ['/simulations', 'Simulations'],
-    ['/trends', 'Trends'],
-    ['/repaired', 'Repaired'],
-    ['/admin', 'Admin'],
-  ];
+  const signOut = () => {
+    logout();
+    nav('/login');
+  };
 
   return (
-    <div className="shell">
-      <RoadBackdrop />
-      <header className="site-head">
-        <div className="site-title">
-          <small>PAVEMENT INTELLIGENCE · MDR47 CORRIDOR</small>
-          <NavLink to="/home" className="site-name">DIGIROAD</NavLink>
-        </div>
-        <nav className="site-nav" aria-label="Primary">
-          {links.map(([to, label]) => (
+    <div className={`shell ${onHome ? 'on-hero' : ''} ${menu ? 'menu-open' : ''}`}>
+      <header className="era-head">
+        <NavLink to="/home" className="era-logo">DigiRoad</NavLink>
+        <nav className="era-links" aria-label="Primary">
+          {NAV_LINKS.map(([to, label]) => (
             <NavLink key={to} to={to}>{label}</NavLink>
           ))}
-          <span className="site-user">
-            {user.name} · {role === 'admin' ? 'ADMIN' : 'PUBLIC'}
-          </span>
-          <button
-            onClick={() => {
-              logout();
-              nav('/login');
-            }}
-          >
-            Log out
-          </button>
         </nav>
+        <div className="era-actions">
+          <span className="era-user">{user.name} · {role === 'admin' ? 'Admin' : 'Public'}</span>
+          <button className="era-pill" onClick={signOut}>Log out</button>
+          <button className="era-menu-btn" onClick={() => setMenu(m => !m)} aria-expanded={menu}>
+            {menu ? 'Close' : 'Menu'}
+          </button>
+        </div>
       </header>
+      <div className="era-menu" aria-hidden={!menu}>
+        <nav>
+          {NAV_LINKS.map(([to, label], i) => (
+            <NavLink key={to} to={to}>
+              <small>{String(i + 1).padStart(2, '0')}</small>
+              {label}
+            </NavLink>
+          ))}
+        </nav>
+        <div className="era-menu-foot">
+          <span>{user.name} · {role === 'admin' ? 'Admin' : 'Public'}</span>
+          <button onClick={signOut}>Log out</button>
+        </div>
+      </div>
       <main className="main">
         <div className="content">
           <Routes>
@@ -330,7 +337,36 @@ function Shell() {
             <Route path="/admin" element={<Admin />} />
           </Routes>
         </div>
-        <SiteInfo index={`NETWORK PCI ${avgPci} · ${segments.length} SEGMENTS · ${new Date().getFullYear()}`} />
+        <footer className="era-foot">
+          <div className="era-foot-top">
+            <span className="era-foot-mark">DigiRoad</span>
+            <button className="era-pill light" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+              To top ↑
+            </button>
+          </div>
+          <div className="era-foot-grid">
+            <div>
+              <small className="caption">Corridor</small>
+              <b>Vembayam – Pallipuram Road (MDR47)</b>
+              <span>Thiruvananthapuram, Kerala</span>
+            </div>
+            <div>
+              <small className="caption">Network index</small>
+              <b>PCI {avgPci} / 100</b>
+              <span>{segments.length} monitored segments</span>
+            </div>
+            <div>
+              <small className="caption">Workspace</small>
+              {NAV_LINKS.map(([to, label]) => (
+                <NavLink key={to} to={to}>{label}</NavLink>
+              ))}
+            </div>
+          </div>
+          <div className="era-foot-base">
+            <span>© {new Date().getFullYear()} DigiRoad · Pavement intelligence</span>
+            <span>Map data © OpenStreetMap contributors</span>
+          </div>
+        </footer>
       </main>
       {toast && (
         <div className="toast">
@@ -380,6 +416,7 @@ function Home() {
   const [query, Q] = useState('');
   const [modal, Modal] = useState(false);
   const [bot, BotOpen] = useState(false);
+  const [night, setNight] = useState(false);
 
   const [selectedComplaint, setSelectedComplaint] = useState<Complaint | null>(null);
 
@@ -395,44 +432,117 @@ function Home() {
     return (segments.reduce((acc, s) => acc + s.pci, 0) / segments.length).toFixed(1);
   }, [segments]);
 
+  const worst = [...segments].sort((a, b) => a.pci - b.pci)[0];
+  const services = [
+    {
+      img: PHOTOS.ghat,
+      title: 'Condition monitoring',
+      text: 'Every segment is scored on the Pavement Condition Index from cracking, raveling, rutting, patching and roughness, then mapped in colour.',
+      action: <a href="#corridor-map">View the live map</a>,
+    },
+    {
+      img: PHOTOS.avenue,
+      title: 'Decay simulation',
+      text: 'Weather and traffic drive a deterioration model that forecasts how each road will age, so repairs land before the surface fails.',
+      action: <NavLink to="/simulations">Run a simulation</NavLink>,
+    },
+    {
+      img: PHOTOS.flood,
+      title: 'Citizen repair loop',
+      text: 'Residents report potholes, drainage and surface damage. Engineers track each complaint from report to repair, in the open.',
+      action: <button onClick={() => Modal(true)}>Report an issue</button>,
+    },
+  ];
+
   return (
     <>
-      <Heading
-        eyebrow="HOME / NETWORK OVERVIEW"
-        title="Home"
-        description="A live view of pavement condition across the monitored corridor."
-        action={
-          <button className="secondary" onClick={() => Modal(true)}>
-            <Plus size={16} /> Report an issue
+      <section className={`era-hero ${night ? 'is-night' : ''}`}>
+        <div className="era-hero-img day" style={{ backgroundImage: `url(${PHOTOS.hill})` }} />
+        <div className="era-hero-img night" style={{ backgroundImage: `url(${PHOTOS.night})` }} />
+        <div className="era-hero-shade" />
+        <div className="era-hero-copy">
+          <small className="caption">Vembayam – Pallipuram Road · Kerala</small>
+          <h1>
+            Every road,
+            <br />
+            <em>read closely.</em>
+          </h1>
+        </div>
+        <div className="era-hero-foot">
+          <div className="era-toggle" role="group" aria-label="Hero photo">
+            <button className={!night ? 'on' : ''} onClick={() => setNight(false)}>By day</button>
+            <button className={night ? 'on' : ''} onClick={() => setNight(true)}>By night</button>
+          </div>
+          <a href="#corridor-intro" className="era-scroll">Scroll</a>
+          <span className="era-count">0{night ? 2 : 1} / 02</span>
+        </div>
+      </section>
+
+      <section className="era-intro" id="corridor-intro">
+        <div className="era-intro-head" data-reveal>
+          <small className="caption">The corridor</small>
+          <h2>
+            Three kilometres of road,
+            <br />
+            <em>measured every day.</em>
+          </h2>
+          <p>
+            DigiRoad watches the MDR47 corridor in Thiruvananthapuram segment by segment. It combines live condition
+            scores, weather-driven decay forecasts and citizen reports so road teams know where to act first.
+          </p>
+          <button className="era-pill" onClick={() => Modal(true)}>
+            <Plus size={15} /> Report an issue
           </button>
-        }
-      />
-      <div className="snapshot">
-        <div className="snapshot-label">
-          <i /> NETWORK SNAPSHOT
         </div>
-        <div>
-          <span>Segments monitored</span>
-          <b>0{segments.length} <small>roads</small></b>
+        <div className="era-stats" data-reveal>
+          <div>
+            <small>Segments monitored</small>
+            <b>{String(segments.length).padStart(2, '0')}</b>
+          </div>
+          <div>
+            <small>Average PCI</small>
+            <b>{avgPci}<i>/100</i></b>
+          </div>
+          <div>
+            <small>Open complaints</small>
+            <b>{String(under.length).padStart(2, '0')}</b>
+          </div>
+          <div>
+            <small>Needs attention</small>
+            <b className="era-stat-text">{worst ? worst.id : '—'}</b>
+          </div>
         </div>
-        <div>
-          <span>Average PCI</span>
-          <b>{avgPci} <small>/ 100</small></b>
+      </section>
+
+      <section className="era-services">
+        <div className="era-section-head" data-reveal>
+          <small className="caption">What we do</small>
+          <h2>
+            Three ways we keep
+            <br />
+            <em>the road honest.</em>
+          </h2>
         </div>
-        <div>
-          <span>Active complaints</span>
-          <b className="amber">{String(under.length).padStart(2, '0')} <small>open</small></b>
+        <div className="era-service-list">
+          {services.map((s, i) => (
+            <article className="era-service" key={s.title} data-reveal>
+              <div className="era-service-img" style={{ backgroundImage: `url(${s.img})` }} />
+              <div className="era-service-body">
+                <span className="era-num">{String(i + 1).padStart(2, '0')}</span>
+                <h3>{s.title}</h3>
+                <p>{s.text}</p>
+                <span className="era-link">{s.action}</span>
+              </div>
+            </article>
+          ))}
         </div>
-        <div>
-          <span>Last survey</span>
-          <b>19 <small>Oct 2026</small></b>
-        </div>
-      </div>
-      <section className="map-section">
+      </section>
+
+      <section className="map-section" id="corridor-map" data-reveal>
         <div className="section-head">
           <div>
-            <div className="kicker">SPATIAL CONDITION MODEL</div>
-            <h2>Technopark corridor <span>·</span> Thiruvananthapuram, Kerala</h2>
+            <div className="kicker">Spatial condition model</div>
+            <h2>The corridor, <em>segment by segment.</em></h2>
           </div>
           <div className="searchbox">
             <Search size={15} />
@@ -460,7 +570,7 @@ function Home() {
         <div className="map-wrap">
           <LeafletMap selected={selected} onSelect={Sel} segments={segments} />
           <div className="map-location">
-            <MapPin size={14} /> KAZHAKKOOTTAM <small>8.57° N · 76.88° E</small>
+            <MapPin size={14} /> POTHENCODE <small>8.62° N · 76.91° E</small>
           </div>
           <div className="legend">
             <b>ROAD CONDITION</b>
@@ -473,29 +583,42 @@ function Home() {
           </div>
           <small className="map-credit">© OpenStreetMap contributors · Live condition overlay</small>
         </div>
-        <div className="segment-list">
-          {segments.map(s => (
-            <button className={`segment ${selected?.id === s.id ? 'picked' : ''}`} key={s.id} onClick={() => Sel(s)}>
-              <i className={`segment-mark ${hc(s.health)}`} />
-              <small>{s.id}</small>
-              <span>
-                {s.name}
-                <small>Dynamic evaluation · PCI {s.pci}</small>
+      </section>
+
+      <section className="era-segments">
+        <div className="era-section-head" data-reveal>
+          <small className="caption">Monitored segments</small>
+          <h2>
+            Choose a segment,
+            <br />
+            <em>see its condition.</em>
+          </h2>
+        </div>
+        <div className="era-seg-grid">
+          {segments.map((s, i) => (
+            <button className={`era-seg ${selected?.id === s.id ? 'picked' : ''}`} key={s.id} onClick={() => Sel(s)} data-reveal>
+              <span className="era-seg-top">
+                <span className="era-num">{String(i + 1).padStart(2, '0')}</span>
+                <HealthTag h={s.health} />
               </span>
-              <HealthTag h={s.health} />
-              <b className="score">
-                {s.pci}
-                <small>PCI</small>
-              </b>
-              <ChevronRight size={16} />
+              <span className="era-seg-id">{s.id}</span>
+              <span className="era-seg-name">{s.name}</span>
+              <span className="era-seg-stats">
+                <span><small>PCI</small><b>{s.pci}</b></span>
+                <span><small>IRI m/km</small><b>{s.iri}</b></span>
+                <span><small>Cracking</small><b>{s.cracking}%</b></span>
+                <span><small>Rutting</small><b>{s.rutting} mm</b></span>
+              </span>
+              <span className="era-link">Explore segment <ChevronRight size={14} /></span>
             </button>
           ))}
         </div>
       </section>
-      <section className="complaints">
+
+      <section className="complaints" data-reveal>
         <div className="section-title">
           <div>
-            <div className="kicker">CITIZEN FEEDBACK</div>
+            <div className="kicker">Citizen feedback</div>
             <h2>
               Complaints tracker <small>{String(complaints.length).padStart(2, '0')}</small>
             </h2>
@@ -517,6 +640,21 @@ function Home() {
             empty="Repairs will appear here"
             onSelectComplaint={setSelectedComplaint}
           />
+        </div>
+      </section>
+
+      <section className="era-cta" style={{ backgroundImage: `url(${PHOTOS.hill})` }}>
+        <div className="era-cta-inner" data-reveal>
+          <small className="caption">Seen something on the road?</small>
+          <h2>
+            Tell us where it hurts.
+            <br />
+            <em>We'll track the repair.</em>
+          </h2>
+          <div className="era-cta-actions">
+            <button className="era-pill light" onClick={() => Modal(true)}>Report an issue</button>
+            <button className="era-pill ghost" onClick={() => BotOpen(true)}>Ask PaveBot</button>
+          </div>
         </div>
       </section>
       <button className="bot-fab" onClick={() => BotOpen(true)}>
@@ -548,7 +686,7 @@ function MapLines({
     <>
       {segments.map(s => (
         <React.Fragment key={s.id}>
-          <Polyline positions={s.coords} pathOptions={{ color: '#0b0f17', weight: 11, opacity: 1 }} />
+          <Polyline positions={s.coords} pathOptions={{ color: '#17233b', weight: 11, opacity: 1 }} />
           <Polyline
             positions={s.coords}
             pathOptions={{
@@ -576,7 +714,7 @@ function LeafletMap({
   segments: Segment[];
 }) {
   const [tilesFailed, fail] = useState(false);
-  const mapProps = { center: [8.573, 76.882], zoom: 14, zoomControl: false, className: 'leaflet' } as React.ComponentProps<
+  const mapProps = { center: [8.6262, 76.9105], zoom: 15, scrollWheelZoom: false, zoomControl: false, className: 'leaflet' } as React.ComponentProps<
     typeof MapContainer
   >;
   const tileProps = {
@@ -1004,15 +1142,15 @@ function Simulations() {
                 <AreaChart data={Array.from({ length: 7 }, (_, i) => ({ day: `Day ${i * 5}`, pci: Math.max(s.pci - i * 0.5, 0) }))}>
                   <defs>
                     <linearGradient id="pciFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#6b8f80" stopOpacity={0.25} />
-                      <stop offset="95%" stopColor="#6b8f80" stopOpacity={0} />
+                      <stop offset="0%" stopColor="#b5cedb" stopOpacity={0.25} />
+                      <stop offset="95%" stopColor="#b5cedb" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid stroke="#26303b" vertical={false} />
-                  <XAxis dataKey="day" stroke="#87919b" />
-                  <YAxis domain={[0, 100]} stroke="#87919b" />
+                  <CartesianGrid stroke="#17233b1a" vertical={false} />
+                  <XAxis dataKey="day" stroke="#17233b99" />
+                  <YAxis domain={[0, 100]} stroke="#17233b99" />
                   <ChartTooltip contentStyle={{ background: '#131a23', border: '1px solid #303a46', color: '#edf0f1' }} />
-                  <Area dataKey="pci" stroke="#80ae9b" fill="url(#pciFill)" />
+                  <Area dataKey="pci" stroke="#17233b" fill="url(#pciFill)" />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
@@ -1132,9 +1270,9 @@ function Trends() {
         <div className="chart">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={points}>
-              <CartesianGrid stroke="#26303b" vertical={false} />
-              <XAxis dataKey="date" interval={period === '30 days' ? 4 : 14} stroke="#87919b" tick={{ fontSize: 11 }} />
-              <YAxis domain={[0, 100]} stroke="#87919b" />
+              <CartesianGrid stroke="#17233b1a" vertical={false} />
+              <XAxis dataKey="date" interval={period === '30 days' ? 4 : 14} stroke="#17233b99" tick={{ fontSize: 11 }} />
+              <YAxis domain={[0, 100]} stroke="#17233b99" />
               <ChartTooltip
                 content={({ active, payload }) =>
                   active && payload?.[0] ? (
@@ -1145,7 +1283,7 @@ function Trends() {
                   ) : null
                 }
               />
-              <Line dataKey="pci" type="monotone" stroke="#8eb49e" strokeWidth={2} dot={false} activeDot={{ r: 4, fill: '#8eb49e' }} />
+              <Line dataKey="pci" type="monotone" stroke="#17233b" strokeWidth={2} dot={false} activeDot={{ r: 4, fill: '#8eb49e' }} />
             </LineChart>
           </ResponsiveContainer>
         </div>
