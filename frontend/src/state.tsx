@@ -101,8 +101,8 @@ export const defaultSegments: Segment[] = [
     pci: 47,
     health: 'Very Poor',
     coords: [
-      [8.6281, 76.9242],
-      [8.6225, 76.9160],
+      [8.6321, 76.9206],
+      [8.6267, 76.9159],
     ],
   },
   {
@@ -116,8 +116,8 @@ export const defaultSegments: Segment[] = [
     pci: 40,
     health: 'Very Poor',
     coords: [
-      [8.6225, 76.9160],
-      [8.6170, 76.9079],
+      [8.6267, 76.9159],
+      [8.6238, 76.9084],
     ],
   },
   {
@@ -131,8 +131,8 @@ export const defaultSegments: Segment[] = [
     pci: 30,
     health: 'Very Poor',
     coords: [
-      [8.6170, 76.9079],
-      [8.6115, 76.8998],
+      [8.6238, 76.9084],
+      [8.6197, 76.9004],
     ],
   },
 ];
@@ -274,7 +274,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
               iri: Number((p.iri_m_km || 1.2).toFixed(2)),
               pci: Math.round(p.pci_score || 0),
               health: (p.road_health as Health) || classifyHealth(p.pci_score || 0),
-              coords: coords.length ? coords : [[8.6281, 76.9242], [8.6225, 76.9160]],
+              coords: coords.length ? coords : [[8.6321, 76.9206], [8.6267, 76.9159]],
             };
           });
           if (segs.length) setSegmentsList(segs);
