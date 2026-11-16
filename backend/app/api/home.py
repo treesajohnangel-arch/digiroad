@@ -1,5 +1,7 @@
 import re
+import json
 import logging
+from pathlib import Path
 from typing import Dict, Any, List
 from fastapi import APIRouter, Query
 from app.services.decay_model import calculate_road_health, get_health_color_hex
@@ -8,6 +10,12 @@ from app.services.supabase_client import supabase
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Home & Map"])
+
+# Road-snapped [lon, lat] polylines per segment (OSRM, from surveyed endpoints).
+# Overrides the 2-point straight lines stored in road_segments.
+ROAD_GEOMETRY: Dict[str, List[List[float]]] = json.loads(
+    (Path(__file__).resolve().parent.parent / "data" / "road_geometry.json").read_text(encoding="utf-8")
+)
 
 # Default sample road segment dataset matching database segments exactly (MDR47 S01, S02, S03)
 MOCK_ROAD_SEGMENTS: List[Dict[str, Any]] = [
@@ -25,8 +33,8 @@ MOCK_ROAD_SEGMENTS: List[Dict[str, Any]] = [
         "road_health": "Very Poor",
         "color_hex": "#991B1B",
         "coordinates": [
-            [76.9242, 8.6281],
-            [76.9160, 8.6225],
+            [76.9206, 8.6321],
+            [76.9159, 8.6267],
         ],
     },
     {
@@ -43,8 +51,8 @@ MOCK_ROAD_SEGMENTS: List[Dict[str, Any]] = [
         "road_health": "Very Poor",
         "color_hex": "#991B1B",
         "coordinates": [
-            [76.9160, 8.6225],
-            [76.9079, 8.6170],
+            [76.9159, 8.6267],
+            [76.9084, 8.6238],
         ],
     },
     {
@@ -61,8 +69,8 @@ MOCK_ROAD_SEGMENTS: List[Dict[str, Any]] = [
         "road_health": "Very Poor",
         "color_hex": "#991B1B",
         "coordinates": [
-            [76.9079, 8.6170],
-            [76.8998, 8.6115],
+            [76.9084, 8.6238],
+            [76.9004, 8.6197],
         ],
     },
 ]
@@ -130,14 +138,14 @@ async def get_map_data():
         pothole_pct = float(dyn.get("pothole_pct") if dyn.get("pothole_pct") is not None else seg.get("pothole_pct", 0.0))
         rut_depth_mm = float(dyn.get("rut_depth_mm", dyn.get("rutting_mm", seg.get("rut_depth_mm", 0.0))))
 
-        coords = seg.get("coordinates")
+        coords = ROAD_GEOMETRY.get(seg_id) or seg.get("coordinates")
         if not coords:
             s_lat, s_lon = seg.get("start_lat"), seg.get("start_lon")
             e_lat, e_lon = seg.get("end_lat"), seg.get("end_lon")
             if None not in (s_lat, s_lon, e_lat, e_lon):
                 coords = [[float(s_lon), float(s_lat)], [float(e_lon), float(e_lat)]]
             else:
-                coords = [[76.9242, 8.6281], [76.9160, 8.6225]]
+                coords = [[76.9206, 8.6321], [76.9159, 8.6267]]
 
         base_road_name = seg.get("road_name") or f"Road {seg_id}"
         display_road_name = _format_display_name(seg_id, base_road_name)
