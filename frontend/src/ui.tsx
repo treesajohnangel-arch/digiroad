@@ -153,50 +153,39 @@ function Login() {
           <div className="brand-intro-lockup"><LogoMark /><b>DIGIROAD</b></div>
         </div>
       )}
-      <section className="login-left">
-        <Brand />
-        <div className="hero-copy">
-          <h1>
-            See the road
-            <br />
-            beneath the road.
-          </h1>
-          <p>Street-level condition intelligence for the people who keep a city moving.</p>
-          <div className="road-art">
-            <div className="art-grid" />
-            <svg viewBox="0 0 600 300" preserveAspectRatio="none">
-              <path d="M-20 225 C95 220 135 126 250 143 S420 242 620 46" />
-              <path className="road-dash" d="M-20 225 C95 220 135 126 250 143 S420 242 620 46" />
-              <path className="road-good" d="M-20 225 C95 220 135 126 250 143 S420 242 620 46" />
-            </svg>
-          </div>
+      <RoadBackdrop />
+      <header className="site-head">
+        <div className="site-title">
+          <small>PAVEMENT INTELLIGENCE · MDR47 CORRIDOR</small>
+          <span className="site-name">DIGIROAD</span>
         </div>
+        <nav className="site-nav" aria-label="Account">
+          {(['login', 'signup'] as const).map(t => (
+            <button
+              key={t}
+              className={tab === t ? 'active' : ''}
+              onClick={() => {
+                T(t);
+                Xe('');
+              }}
+            >
+              {t === 'login' ? 'Log in' : 'Sign up'}
+            </button>
+          ))}
+        </nav>
+      </header>
+      <section className="login-hero">
+        <h1>
+          See the road
+          <br />
+          beneath the road.
+        </h1>
+        <p>Street-level condition intelligence for the people who keep Kerala's roads moving.</p>
       </section>
       <section className="login-right">
-        <div className="mobile-brand"><Brand /></div>
         <div className="auth">
           <h2>{tab === 'login' ? 'Welcome back' : 'Create an account'}</h2>
           <p>{tab === 'login' ? 'Sign in to continue to your workspace.' : 'Join the municipal road health workspace.'}</p>
-          <div className="tabs">
-            <button
-              className={tab === 'login' ? 'active' : ''}
-              onClick={() => {
-                T('login');
-                Xe('');
-              }}
-            >
-              Log in
-            </button>
-            <button
-              className={tab === 'signup' ? 'active' : ''}
-              onClick={() => {
-                T('signup');
-                Xe('');
-              }}
-            >
-              Sign up
-            </button>
-          </div>
           <form onSubmit={submit}>
             {tab === 'signup' && (
               <label>
@@ -244,15 +233,53 @@ function Login() {
           </form>
         </div>
       </section>
+      <SiteInfo index={`ROAD HEALTH WORKSPACE ${new Date().getFullYear()}`} />
     </main>
+  );
+}
+
+// Kerala road photos in public/bg, crossfaded behind every page.
+const ROAD_PHOTOS = Array.from({ length: 10 }, (_, i) => `/bg/road-${String(i + 1).padStart(2, '0')}.jpg`);
+
+function RoadBackdrop() {
+  const [active, setActive] = useState(0);
+  useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const timer = window.setInterval(() => setActive(i => (i + 1) % ROAD_PHOTOS.length), 7000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return (
+    <div className="road-backdrop" aria-hidden="true">
+      {ROAD_PHOTOS.map((src, i) => (
+        <div key={src} className={`road-photo ${i === active ? 'on' : ''}`} style={{ backgroundImage: `url(${src})` }} />
+      ))}
+      <div className="road-veil" />
+    </div>
+  );
+}
+
+function SiteInfo({ index }: { index: string }) {
+  return (
+    <footer className="site-info">
+      <div>
+        <small>BASE</small>
+        <b>THIRUVANANTHAPURAM, KERALA</b>
+      </div>
+      <div>
+        <small>FOCUS</small>
+        <b>PAVEMENT CONDITION / REPAIR PLANNING / CITIZEN REPORTS</b>
+      </div>
+      <div>
+        <small>INDEX</small>
+        <b>{index}</b>
+      </div>
+    </footer>
   );
 }
 
 function Shell() {
   const { role, user, logout, toast, segments } = useApp();
-  const [mobile, M] = useState(false);
   const nav = useNavigate();
-  const location = useLocation();
 
   const avgPci = useMemo(() => {
     if (!segments.length) return 0;
@@ -260,106 +287,40 @@ function Shell() {
     return (sum / segments.length).toFixed(1);
   }, [segments]);
 
+  const links: [string, string][] = [
+    ['/home', 'Home'],
+    ['/simulations', 'Simulations'],
+    ['/trends', 'Trends'],
+    ['/repaired', 'Repaired'],
+    ['/admin', 'Admin'],
+  ];
+
   return (
     <div className="shell">
-      <aside className={`sidebar ${mobile ? 'show' : ''}`}>
-        <Brand />
-        <div className="tenant">
-          <span>TVM</span>
-          <div>
-            <b>Thiruvananthapuram</b>
-            <small>Municipal Corporation</small>
-          </div>
-          <ChevronDown size={14} />
+      <RoadBackdrop />
+      <header className="site-head">
+        <div className="site-title">
+          <small>PAVEMENT INTELLIGENCE · MDR47 CORRIDOR</small>
+          <NavLink to="/home" className="site-name">DIGIROAD</NavLink>
         </div>
-        <div className="side-label">WORKSPACE</div>
-        <nav>
-          <NavLink to="/home" onClick={() => M(false)}>
-            <Layers3 />Home
-          </NavLink>
-          <NavLink to="/simulations" onClick={() => M(false)}>
-            <Activity />Simulations
-          </NavLink>
-          <NavLink to="/trends" onClick={() => M(false)}>
-            <TrendingUp />Trends
-          </NavLink>
-          <NavLink to="/repaired" onClick={() => M(false)}>
-            <Check />Repaired
-          </NavLink>
-          <NavLink to="/admin" onClick={() => M(false)}>
-            <Shield />Admin<ChevronRight className="nav-arrow" />
-          </NavLink>
-        </nav>
-        <div className="network">
-          <div className="side-label">NETWORK HEALTH</div>
-          <div className="pci-head">
-            <span>Overall PCI</span>
-            <b>{avgPci}</b>
-          </div>
-          <div className="pci-bar">
-            <i style={{ width: `${Math.min(100, Math.max(0, Number(avgPci)))}%` }} />
-          </div>
-          <small>
-            <i className="dot fair" /> Monitored corridor condition
-          </small>
-        </div>
-        <div className="monitor">
-          <div className="side-label">
-            MONITORED SEGMENTS <span>0{segments.length}</span>
-          </div>
-          {segments.map(s => (
-            <NavLink to="/home" key={s.id}>
-              <i className={`dot ${hc(s.health)}`} />
-              <span>{s.name}</span>
-              <small>{s.pci}</small>
-            </NavLink>
+        <nav className="site-nav" aria-label="Primary">
+          {links.map(([to, label]) => (
+            <NavLink key={to} to={to}>{label}</NavLink>
           ))}
-        </div>
-        <div className="account">
-          <div className="avatar">{user.name.slice(0, 1).toUpperCase()}</div>
-          <div>
-            <b>{user.name}</b>
-            <small>{role === 'admin' ? 'Network administrator' : 'Field engineer'}</small>
-          </div>
+          <span className="site-user">
+            {user.name} · {role === 'admin' ? 'ADMIN' : 'PUBLIC'}
+          </span>
           <button
             onClick={() => {
               logout();
               nav('/login');
             }}
-            title="Logout"
           >
-            <LogOut size={16} />
+            Log out
           </button>
-        </div>
-      </aside>
+        </nav>
+      </header>
       <main className="main">
-        <header className="topbar">
-          <button className="hamb" onClick={() => M(true)}>
-            <Menu />
-          </button>
-          <span className="breadcrumb">
-            Workspace <ChevronRight size={13} /> <b>{location.pathname.split('/')[1] || 'home'}</b>
-          </span>
-          <div className="top-controls">
-            <button className="search-trigger" onClick={() => document.getElementById('road-search')?.focus()}>
-              <Search size={15} /> Search segments <kbd><Command size={11} /> K</kbd>
-            </button>
-            <i className="divider" />
-            <span className={`role ${role}`}>{role}</span>
-            <i className="divider" />
-            <span className="avatar small">{user.name[0]}</span>
-            <button
-              className="logout"
-              onClick={() => {
-                logout();
-                nav('/login');
-              }}
-              title="Logout"
-            >
-              <LogOut size={16} />
-            </button>
-          </div>
-        </header>
         <div className="content">
           <Routes>
             <Route path="/home" element={<Home />} />
@@ -369,6 +330,7 @@ function Shell() {
             <Route path="/admin" element={<Admin />} />
           </Routes>
         </div>
+        <SiteInfo index={`NETWORK PCI ${avgPci} · ${segments.length} SEGMENTS · ${new Date().getFullYear()}`} />
       </main>
       {toast && (
         <div className="toast">
