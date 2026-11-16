@@ -134,44 +134,6 @@ export const defaultSegments: Segment[] = [
   },
 ];
 
-const seed: Complaint[] = [
-  {
-    id: 'CMP-2418',
-    citizen: 'Anjali Nair',
-    contact: '••••• 4821',
-    segmentId: 'MDR47-S01',
-    category: 'Pothole',
-    severity: 'High',
-    description: 'Deep pothole near the bus stop is forcing two-wheelers into traffic.',
-    status: 'nil',
-    created: 'Today, 09:42',
-  },
-  {
-    id: 'CMP-2416',
-    citizen: 'R. Suresh',
-    contact: '••••• 7104',
-    segmentId: 'MDR47-S02',
-    category: 'Surface damage',
-    severity: 'Medium',
-    description: 'Loose aggregate and surface wear at the junction approach.',
-    status: 'Under Progress',
-    created: 'Yesterday, 16:18',
-  },
-  {
-    id: 'CMP-2397',
-    citizen: 'Meera Das',
-    contact: '••••• 2360',
-    segmentId: 'MDR47-S03',
-    category: 'Drainage',
-    severity: 'Low',
-    description: 'Water collects along the curb after heavy rain.',
-    status: 'Repaired',
-    created: '12 Oct, 11:06',
-    repairedAt: '2026-10-12T11:06:00Z',
-    repairType: 'FULL_RESURFACING',
-  },
-];
-
 export function classifyHealth(pci: number): Health {
   if (pci >= 85) return 'Good';
   if (pci >= 60) return 'Fair';
@@ -212,9 +174,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [authToken, setAuthToken] = useState<string | null>(() => window.sessionStorage.getItem('digiroad-token'));
   const [loggedIn, setLoggedIn] = useState(() => Boolean(window.sessionStorage.getItem('digiroad-token')));
   const [segmentsList, setSegmentsList] = useState<Segment[]>(defaultSegments);
-  const [complaints, setComplaints] = useState<Complaint[]>(seed);
+  const [complaints, setComplaints] = useState<Complaint[]>([]);
   const [recentRepairIds, setRecentRepairIds] = useState<string[]>([]);
-  const [archivedRepairIds, setArchivedRepairIds] = useState<string[]>(seed.filter(c => c.status === 'Repaired').map(c => c.id));
+  const [archivedRepairIds, setArchivedRepairIds] = useState<string[]>([]);
   const [trendLogs, setTrendLogs] = useState<Record<string, TrendPoint[]>>({});
   const [toast, setToast] = useState('');
 
