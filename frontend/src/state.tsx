@@ -1,4 +1,10 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+// Copy of backend/app/data/road_geometry.json ([lon, lat]); keep both in sync.
+import roadGeometry from './roadGeometry.json';
+
+// Road-snapped [lat, lon] path for a segment, so the map is right even before the API answers.
+const snappedCoords = (id: keyof typeof roadGeometry): [number, number][] =>
+  roadGeometry[id].map(([lon, lat]) => [lat, lon] as [number, number]);
 
 export type Health = 'Very Poor' | 'Poor' | 'Fair' | 'Good';
 
@@ -100,10 +106,7 @@ export const defaultSegments: Segment[] = [
     iri: 1.98,
     pci: 47,
     health: 'Very Poor',
-    coords: [
-      [8.6321, 76.9206],
-      [8.6267, 76.9159],
-    ],
+    coords: snappedCoords('MDR47-S01'),
   },
   {
     id: 'MDR47-S02',
@@ -115,10 +118,7 @@ export const defaultSegments: Segment[] = [
     iri: 2.04,
     pci: 40,
     health: 'Very Poor',
-    coords: [
-      [8.6267, 76.9159],
-      [8.6238, 76.9084],
-    ],
+    coords: snappedCoords('MDR47-S02'),
   },
   {
     id: 'MDR47-S03',
@@ -130,10 +130,7 @@ export const defaultSegments: Segment[] = [
     iri: 2.06,
     pci: 30,
     health: 'Very Poor',
-    coords: [
-      [8.6238, 76.9084],
-      [8.6197, 76.9004],
-    ],
+    coords: snappedCoords('MDR47-S03'),
   },
 ];
 
