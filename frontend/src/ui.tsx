@@ -849,34 +849,44 @@ function ComplaintModal({
 }
 
 function PaveBot({ close }: { close: () => void }) {
-  const { complaints, segments } = useApp();
-  const [messages, M] = useState([
-    { by: 'bot', text: 'Hello. I’m PaveBot, your local road-health assistant. Ask me about the monitored corridor.' },
+  type ChatMsg = { by: 'bot' | 'you'; text: string; error?: boolean };
+  const [messages, M] = useState<ChatMsg[]>([
+    { by: 'bot', text: 'Hello. I’m PaveBot, your road-health copilot. I read the live DigiRoad database, so ask me anything about the segments, their condition history, or complaints.' },
   ]);
   const [input, I] = useState('');
+  const [busy, setBusy] = useState(false);
+  const endRef = React.useRef<HTMLDivElement>(null);
 
-  function answer(q: string) {
-    const t = q.toLowerCase();
-    const sorted = [...segments].sort((a, b) => a.pci - b.pci);
-    const worst = sorted[0];
-    const best = sorted[sorted.length - 1];
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, busy]);
 
-    if (t.includes('attention') || t.includes('worst')) {
-      return `${worst.name} needs attention first. PCI is ${worst.pci} (${worst.health}), with ${worst.cracking}% cracking.`;
-    }
-    if (t.includes('complaint')) {
-      return `There are ${complaints.filter(c => c.status === 'Under Progress').length} complaints under progress and ${complaints.filter(c => c.status === 'Repaired').length} repaired.`;
-    }
-    if (t.includes('good') || t.includes('best')) {
-      return `${best.name} is currently in the best condition with a PCI score of ${best.pci} (${best.health}).`;
-    }
-    return `The corridor has ${segments.length} monitored segments. ${worst.name} has the lowest score (${worst.pci}); ${best.name} is highest (${best.pci}).`;
-  }
-
-  function ask(q = input) {
-    if (!q.trim()) return;
-    M(m => [...m, { by: 'you', text: q }, { by: 'bot', text: answer(q) }]);
+  async function ask(q = input) {
+    const text = q.trim();
+    if (!text || busy) return;
+    // Greeting and failed turns are UI-only; the model sees the real conversation.
+    const history = messages
+      .slice(1)
+      .filter(m => !m.error)
+      .map(m => ({ role: m.by === 'you' ? 'user' : 'assistant', content: m.text }));
+    M(m => [...m, { by: 'you', text }]);
     I('');
+    setBusy(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, history }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.reply) throw new Error(data?.detail || `PaveBot is unavailable (HTTP ${res.status}).`);
+      M(m => [...m, { by: 'bot', text: data.reply }]);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'Network error.';
+      M(m => [...m, { by: 'bot', text: `Sorry, I couldn’t answer that. ${detail}`, error: true }]);
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -899,14 +909,21 @@ function PaveBot({ close }: { close: () => void }) {
         {messages.map((m, i) => (
           <div className={`message ${m.by}`} key={i}>
             {m.by === 'bot' && <Bot size={14} />}
-            <p>{m.text}</p>
+            <p style={{ whiteSpace: 'pre-wrap' }}>{m.text}</p>
           </div>
         ))}
+        {busy && (
+          <div className="message bot">
+            <Bot size={14} />
+            <p>Reading the database…</p>
+          </div>
+        )}
+        <div ref={endRef} />
       </div>
       <div className="quick-asks">
         <small>QUICK QUESTIONS</small>
-        {['Which road needs attention?', 'Show complaint status', 'Which road is in good condition?'].map(q => (
-          <button key={q} onClick={() => ask(q)}>
+        {['Which road needs attention?', 'Show complaint status', 'How has PCI changed over time?'].map(q => (
+          <button key={q} onClick={() => ask(q)} disabled={busy}>
             {q}
             <ChevronRight size={14} />
           </button>
@@ -920,7 +937,7 @@ function PaveBot({ close }: { close: () => void }) {
         }}
       >
         <input value={input} onChange={e => I(e.target.value)} placeholder="Ask about road health…" />
-        <button>
+        <button disabled={busy} aria-label="Send">
           <Send size={16} />
         </button>
       </form>

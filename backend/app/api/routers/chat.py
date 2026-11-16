@@ -1,6 +1,9 @@
 import os
 import json
+import asyncio
 import logging
+from collections import Counter, defaultdict
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
@@ -13,6 +16,13 @@ from app.services.supabase_client import supabase
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["PaveBot Chat"])
+
+# Citizen identity fields never leave the backend through the chatbot (endpoint is public).
+PII_FIELDS = {"citizen_name", "contact", "email", "phone", "phone_number", "user_id", "created_by", "reporter_id"}
+PAGE_SIZE = 1000
+MAX_ROWS_PER_TABLE = 50000
+TIMESTAMP_FIELDS = ("evaluation_timestamp", "execution_timestamp", "updated_at", "created_at")
+METRIC_FIELDS = ("pci_score", "iri_m_km", "cracking_pct", "raveling_pct", "patching_pct", "pothole_pct", "rut_depth_mm")
 
 
 # ---------------------------------------------------------
@@ -34,210 +44,235 @@ class ChatResponse(BaseModel):
 
 
 # ---------------------------------------------------------
-# Helper: Fetch Supabase Snapshot
+# Database snapshot: every row of every road/complaint table
 # ---------------------------------------------------------
+def _fetch_all_rows(table: str) -> List[Dict[str, Any]]:
+    """Read a whole table, paging past Supabase's 1000-row response cap."""
+    rows: List[Dict[str, Any]] = []
+    start = 0
+    while start < MAX_ROWS_PER_TABLE:
+        res = supabase.table(table).select("*").range(start, start + PAGE_SIZE - 1).execute()
+        batch = res.data or []
+        rows.extend(batch)
+        if len(batch) < PAGE_SIZE:
+            break
+        start += PAGE_SIZE
+    return rows
+
+
+def _row_time(row: Dict[str, Any]) -> str:
+    for field in TIMESTAMP_FIELDS:
+        if row.get(field):
+            return str(row[field])
+    return ""
+
+
+def _num(value: Any) -> Optional[float]:
+    try:
+        return round(float(value), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _strip_pii(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in row.items() if k not in PII_FIELDS}
+
+
+def _summarize_evaluations(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Per segment: row count, date range, first/latest full rows, and monthly metric averages."""
+    by_segment: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_segment[str(row.get("segment_id") or "unknown")].append(row)
+
+    summary: Dict[str, Any] = {}
+    for seg_id, seg_rows in sorted(by_segment.items()):
+        seg_rows.sort(key=_row_time)
+        monthly: Dict[str, Dict[str, List[float]]] = defaultdict(lambda: defaultdict(list))
+        for row in seg_rows:
+            month = _row_time(row)[:7] or "undated"
+            for field in METRIC_FIELDS:
+                value = _num(row.get(field))
+                if value is not None:
+                    monthly[month][field].append(value)
+        summary[seg_id] = {
+            "row_count": len(seg_rows),
+            "first_date": _row_time(seg_rows[0]),
+            "latest_date": _row_time(seg_rows[-1]),
+            "first_row": seg_rows[0],
+            "latest_row": seg_rows[-1],
+            "monthly_averages": {
+                month: {
+                    field: {"avg": round(sum(v) / len(v), 2), "min": min(v), "max": max(v)}
+                    for field, v in fields.items()
+                }
+                for month, fields in sorted(monthly.items())
+            },
+        }
+    return summary
+
+
+def _summarize_complaints(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def norm_status(row: Dict[str, Any]) -> str:
+        return str(row.get("status") or "nil").strip().lower()
+
+    per_segment: Dict[str, Counter] = defaultdict(Counter)
+    for row in rows:
+        per_segment[str(row.get("segment_id") or "unknown")][norm_status(row)] += 1
+    return {
+        "total": len(rows),
+        "by_status": dict(Counter(norm_status(r) for r in rows)),
+        "by_severity": dict(Counter(str(r.get("severity") or "unknown") for r in rows)),
+        "by_category": dict(Counter(str(r.get("complaint_heading") or "unknown") for r in rows)),
+        "by_segment_and_status": {seg: dict(c) for seg, c in sorted(per_segment.items())},
+    }
+
+
 async def fetch_database_snapshot() -> Dict[str, Any]:
     """
-    Fetches snapshot data from Supabase tables:
-    - road_segments
-    - dynamic_road_evaluations
-    - user_complaints
-    Falls back gracefully if database queries encounter any errors or timeout.
+    Load the full DigiRoad dataset from Supabase: road_segments, dynamic_road_evaluations,
+    historic_road_evaluations and user_complaints (citizen identity removed), plus summaries.
+    Never substitutes invented data: failures are reported in `database_status`.
     """
     snapshot: Dict[str, Any] = {
-        "road_segments": [],
-        "dynamic_road_evaluations": [],
-        "user_complaints": [],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "database_status": "ok",
+        "errors": {},
     }
 
     if supabase is None:
-        logger.warning("Supabase client is not available for snapshot retrieval.")
-        return _get_fallback_snapshot()
+        snapshot["database_status"] = "unavailable: Supabase client is not configured"
+        return snapshot
+
+    tables = ("road_segments", "dynamic_road_evaluations", "historic_road_evaluations", "user_complaints")
 
     def _sync_fetch() -> Dict[str, Any]:
         data: Dict[str, Any] = {}
-        try:
-            res_segments = supabase.table("road_segments").select("*").limit(25).execute()
-            if res_segments.data:
-                data["road_segments"] = res_segments.data
-        except Exception as e:
-            logger.warning("Failed to fetch snapshot from road_segments: %s", e)
-
-        try:
-            res_evals = (
-                supabase.table("dynamic_road_evaluations")
-                .select("*")
-                .order("execution_timestamp", desc=True)
-                .limit(25)
-                .execute()
-            )
-            if res_evals.data:
-                data["dynamic_road_evaluations"] = res_evals.data
-        except Exception:
+        for table in tables:
             try:
-                res_evals = supabase.table("dynamic_road_evaluations").select("*").limit(25).execute()
-                if res_evals.data:
-                    data["dynamic_road_evaluations"] = res_evals.data
-            except Exception:
-                pass
-
-        try:
-            res_complaints = (
-                supabase.table("user_complaints")
-                .select("*")
-                .order("created_at", desc=True)
-                .limit(25)
-                .execute()
-            )
-            if res_complaints.data:
-                data["user_complaints"] = res_complaints.data
-        except Exception as e:
-            logger.warning("Failed to fetch snapshot from user_complaints: %s", e)
+                data[table] = _fetch_all_rows(table)
+            except Exception as e:
+                logger.warning("PaveBot failed to read %s: %s", table, e)
+                snapshot["errors"][table] = str(e)
+                data[table] = []
         return data
 
-    import asyncio
     try:
-        live_data = await asyncio.wait_for(asyncio.to_thread(_sync_fetch), timeout=7.0)
-        snapshot.update(live_data)
+        data = await asyncio.wait_for(asyncio.to_thread(_sync_fetch), timeout=25.0)
     except Exception as e:
-        logger.warning("Supabase snapshot retrieval timed out or failed: %s. Using baseline PMS fallback.", e)
+        logger.warning("PaveBot database snapshot failed: %s", e)
+        snapshot["database_status"] = f"unavailable: {e}"
+        return snapshot
 
-    # If Supabase tables were empty or failed, supplement with baseline fallback data
-    if not snapshot["road_segments"]:
-        fallback = _get_fallback_snapshot()
-        snapshot["road_segments"] = fallback["road_segments"]
-        if not snapshot["dynamic_road_evaluations"]:
-            snapshot["dynamic_road_evaluations"] = fallback["dynamic_road_evaluations"]
-        if not snapshot["user_complaints"]:
-            snapshot["user_complaints"] = fallback["user_complaints"]
+    complaints = [_strip_pii(r) for r in data["user_complaints"]]
+    complaints.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+    dynamic_rows = data["dynamic_road_evaluations"]
+    historic_rows = data["historic_road_evaluations"]
 
+    snapshot["row_counts"] = {table: len(data[table]) for table in tables}
+    snapshot["road_segments"] = data["road_segments"]
+    snapshot["dynamic_road_evaluations_summary"] = _summarize_evaluations(dynamic_rows)
+    # Small tables go in whole; large ones are represented by the per-segment summary above.
+    if len(dynamic_rows) <= 300:
+        snapshot["dynamic_road_evaluations"] = sorted(dynamic_rows, key=_row_time)
+    snapshot["historic_road_evaluations_summary"] = _summarize_evaluations(historic_rows)
+    snapshot["user_complaints_summary"] = _summarize_complaints(complaints)
+    snapshot["user_complaints"] = complaints
+    if snapshot["errors"]:
+        snapshot["database_status"] = "partial: some tables could not be read"
     return snapshot
 
 
-def _get_fallback_snapshot() -> Dict[str, Any]:
-    """Returns baseline data for PMS reference if live DB is empty or disconnected."""
-    return {
-        "road_segments": [
-            {
-                "segment_id": "MDR47-S01",
-                "road_name": "Vembayam - Pallipuram Road (MDR47 S01)",
-                "chainage": "0.000 - 1.000 km",
-                "pci_score": 100.0,
-                "iri_m_km": 1.2,
-                "cracking_pct": 0.0,
-                "raveling_pct": 0.0,
-                "patching_pct": 0.0,
-                "pothole_pct": 0.0,
-                "road_health": "Good",
-            },
-            {
-                "segment_id": "MDR47-S02",
-                "road_name": "Vembayam - Pallipuram Road (MDR47 S02)",
-                "chainage": "1.000 - 2.000 km",
-                "pci_score": 100.0,
-                "iri_m_km": 1.2,
-                "cracking_pct": 0.0,
-                "raveling_pct": 0.0,
-                "patching_pct": 0.0,
-                "pothole_pct": 0.0,
-                "road_health": "Good",
-            },
-            {
-                "segment_id": "MDR47-S03",
-                "road_name": "Vembayam - Pallipuram Road (MDR47 S03)",
-                "chainage": "2.000 - 3.000 km",
-                "pci_score": 30.0,
-                "iri_m_km": 4.5,
-                "cracking_pct": 28.5,
-                "raveling_pct": 18.0,
-                "patching_pct": 14.5,
-                "pothole_pct": 5.8,
-                "road_health": "Very Poor",
-            },
-        ],
-        "dynamic_road_evaluations": [
-            {
-                "segment_id": "MDR47-S01",
-                "pci_score": 100.0,
-                "iri_m_km": 1.2,
-                "road_health": "Good",
-            },
-            {
-                "segment_id": "MDR47-S02",
-                "pci_score": 100.0,
-                "iri_m_km": 1.2,
-                "road_health": "Good",
-            },
-            {
-                "segment_id": "MDR47-S03",
-                "pci_score": 30.0,
-                "iri_m_km": 4.5,
-                "road_health": "Very Poor",
-            },
-        ],
-        "user_complaints": [],
-    }
-
-
 # ---------------------------------------------------------
-# Helper: Build System Instruction
+# System instruction
 # ---------------------------------------------------------
 def build_system_instruction(snapshot_data: Dict[str, Any]) -> str:
-    """
-    Builds the detailed system instruction for PaveBot incorporating
-    persona, knowledge, decision rules, reasoning, behavior, and the Supabase snapshot.
-    """
-    snapshot_json = json.dumps(snapshot_data, indent=2, default=str)
+    snapshot_json = json.dumps(snapshot_data, default=str, separators=(",", ":"))
 
-    instruction = f"""You are "PaveBot", an expert Pavement Management System (PMS) AI assistant for the DigiRoad platform.
+    return f"""You are "PaveBot", the Pavement Management System (PMS) copilot of the DigiRoad platform.
+You serve road engineers, planners and citizens for the Vembayam - Pallipuram Road (MDR47) corridor in
+Thiruvananthapuram, Kerala, split into segments MDR47-S01, MDR47-S02 and MDR47-S03 (about 1 km each).
 
-### Core Persona & Mission:
-- You are knowledgeable, professional, conversational, and highly helpful.
-- You assist municipal highway engineers, city planners, and citizens in understanding road health conditions, deterioration mechanics, and infrastructure maintenance decisions.
+## How to answer
+1. Answer every part of the question completely. Give exact figures from the dataset (PCI, IRI, distress
+   percentages, rut depth, dates, complaint counts and IDs), name the segment, and state the date of the data.
+2. Base every factual claim about roads or complaints on the DATASET below. Compute totals, averages,
+   rankings, comparisons and trends from it yourself. Never invent segments, readings or complaints.
+3. If the dataset lacks what is asked, or `database_status` is not "ok", say so plainly and say what is missing.
+4. After the facts, add a short engineering interpretation and a recommended action when relevant.
+5. Map loose names to IDs: "segment 1", "S1", "first segment" -> MDR47-S01, and so on.
+6. Handle typos and informal phrasing without comment. Answer in the user's language.
+7. Format for a narrow plain-text chat panel: short paragraphs and "-" bullet lists. Do not use markdown
+   tables, headings, or ** bold markers.
 
-### Knowledge Base:
-1. **PCI (Pavement Condition Index)**: A standard numerical rating between 0 and 100 reflecting the structural integrity and surface condition of a road:
-   - 85–100: Good / Excellent condition. Minimal or negligible surface defects.
-   - 70–84: Satisfactory / Fair condition. Minor superficial distress.
-   - 40–69: Poor / Fair condition with significant structural deterioration.
-   - 0–39: Very Poor / Failed / Critical condition. Structural failure.
-2. **IRI (International Roughness Index, m/km)**: Measures longitudinal road roughness and ride quality:
-   - < 2.0 m/km: Smooth ride quality (high user satisfaction).
-   - 2.0 – 4.0 m/km: Moderate roughness (noticeable vibrations).
-   - > 4.0 m/km: Rough/severe roughness (discomfort, vehicle wear).
-3. **Pavement Distress Types**:
-   - Cracking: Fatigue/alligator cracking (load-related base failure), longitudinal, transverse, block cracking.
-   - Rutting: Depressions in wheel paths due to subgrade or asphalt deformation.
-   - Potholes: Bowl-shaped holes caused by moisture intrusion followed by freeze-thaw or traffic stress.
-   - Raveling & Weathering: Dislodgement of aggregate particles and loss of binder.
-   - Patching: Existing repair areas indicating historical distress points.
-4. **Citizen Complaints**:
-   - Statuses: PENDING, UNDER_PROCESS, REPAIRED.
-   - Citizen feedback provides real-time community ground-truth for rapid maintenance dispatching.
+## Data meaning
+- road_segments: master record per segment (name, chainage, coordinates, baseline condition).
+- dynamic_road_evaluations: current/latest computed condition per segment. Its `latest_row` per segment in
+  the summary is the CURRENT condition; prefer it over road_segments for "now" questions.
+- historic_road_evaluations: past evaluations over time. Use `monthly_averages`, `first_row` and
+  `latest_row` for trends, deterioration rate and history questions.
+- user_complaints: citizen complaints (identities removed). Statuses: "nil" = new/pending,
+  "under process" = repair in progress, "repaired" = closed. Use `user_complaints_summary` for counts.
 
-### Decision Rules for Interventions:
-- **PCI 70 – 85**: Recommend **Preventive Fixes** (e.g., crack sealing, fog seal, micro-surfacing, thin slurry seal) to preserve pavement and stop moisture penetration before structural damage occurs.
-- **PCI 40 – 69**: Recommend **Rehabilitation** (e.g., structural milling, cold in-place recycling, hot-mix asphalt (HMA) overlay, deep patch repairs).
-- **PCI Drops Below 40 (< 40)**: Recommend **Full Reconstruction** (complete removal of surface and base courses, subgrade stabilization, full repaving). Emphasize that surface patching is no longer cost-effective or safe at this stage.
+## Domain knowledge
+- PCI (0-100) health bands used by DigiRoad: >= 85 Good, 70-84.99 Fair, 55-69.99 Poor, < 55 Very Poor.
+  If a row has `road_health`, report that value.
+- IRI (m/km): < 2.0 smooth, 2.0-4.0 moderate roughness, > 4.0 rough.
+- Distresses: cracking (fatigue/alligator, longitudinal, transverse), rutting (wheel-path depressions),
+  potholes (moisture plus traffic), raveling (aggregate loss), patching (past repair areas).
+- Interventions: PCI 70-85 preventive maintenance (crack sealing, fog seal, micro-surfacing);
+  PCI 40-69 rehabilitation (milling and HMA overlay, deep patching, cold in-place recycling);
+  PCI < 40 full reconstruction. Monsoon rainfall, heavy traffic and delayed repair speed up decay;
+  delaying repair until reconstruction can cost 4-5x more.
+- For what-if or forecast questions, extrapolate from the historic trend in the dataset and say it is an estimate.
 
-### Analytical Reasoning & Scenario Handling:
-- **What-If Scenarios & Future Predictions**: Capably project pavement decay over 1–5 years using deterioration models. Explain how factors like heavy monsoon rainfall (increased moisture ingress weakening CBR), high traffic volume (heavy commercial ESAL loading), and delayed maintenance accelerate degradation exponentially (e.g., delaying repairs for 2 years can multiply rehabilitation costs by 4x to 5x when a road slips into full reconstruction).
-- Map user queries mentioning segment names or numbers (e.g., "Segment 101" or "Segment 102") to matching identifiers (e.g., "SEG-101", "SEG-102") from the database snapshot.
-
-### Conversational Behavior:
-- Gracefully handle typos, informal phrasing, or broken grammar without being pedantic.
-- Respond with clear, structured explanations (using markdown bullet points and bold highlights when appropriate).
-- Maintain an encouraging, authoritative, and helpful conversational tone.
-
-### Live DigiRoad Database Snapshot:
-Below is the current snapshot of road segments, dynamic evaluations, and citizen complaints:
-```json
+## DATASET (live from Supabase, generated {snapshot_data.get("generated_at")})
 {snapshot_json}
-```
-
-Use this live snapshot data whenever the user asks about specific road segments, conditions, or complaints.
 """
-    return instruction
+
+
+# ---------------------------------------------------------
+# Gemini call with model discovery
+# ---------------------------------------------------------
+def _generate_reply(client: genai.Client, contents: List[types.Content], config: types.GenerateContentConfig) -> str:
+    """Try the configured model and stable aliases, then any available flash model. Raise with every error."""
+    candidates = [os.getenv("GEMINI_MODEL", ""), "gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-lite-latest"]
+    tried: List[str] = []
+    errors: List[str] = []
+
+    def attempt(model_name: str) -> str:
+        tried.append(model_name)
+        try:
+            response = client.models.generate_content(model=model_name, contents=contents, config=config)
+            return (response.text or "").strip() if response else ""
+        except Exception as e:
+            errors.append(f"{model_name}: {e}")
+            logger.warning("PaveBot model %s failed: %s", model_name, e)
+            return ""
+
+    for name in candidates:
+        if name and name not in tried:
+            reply = attempt(name)
+            if reply:
+                return reply
+
+    # Configured names failed: ask the API which models this key can use.
+    try:
+        available = [
+            m.name.removeprefix("models/")
+            for m in client.models.list()
+            if "generateContent" in (getattr(m, "supported_actions", None) or [])
+            and "flash" in (m.name or "")
+        ]
+    except Exception as e:
+        errors.append(f"list models: {e}")
+        available = []
+    for name in sorted(available, reverse=True)[:4]:
+        if name not in tried:
+            reply = attempt(name)
+            if reply:
+                return reply
+
+    raise RuntimeError("; ".join(errors) or "No model returned a reply.")
 
 
 # ---------------------------------------------------------
@@ -246,100 +281,34 @@ Use this live snapshot data whenever the user asks about specific road segments,
 @router.post("/api/chat", response_model=ChatResponse, status_code=status.HTTP_200_OK)
 @router.post("/chat", response_model=ChatResponse, status_code=status.HTTP_200_OK)
 async def chat_endpoint(request: ChatRequest) -> ChatResponse:
-    """
-    Chat endpoint for DigiRoad AI PaveBot.
-    - Receives user message and chat history.
-    - Fetches snapshot from Supabase (road_segments, dynamic_road_evaluations, user_complaints).
-    - Initializes google-genai Client with GEMINI_API_KEY.
-    - Configures system instructions incorporating persona and database snapshot.
-    - Invokes Gemini 2.0 Flash model.
-    - Returns updated history with assistant reply.
-    """
+    """PaveBot: answers from the full live Supabase dataset using Gemini."""
     user_msg = request.message.strip()
     if not user_msg:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Message content cannot be empty.",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message content cannot be empty.")
 
-    # 1. Fetch Supabase Database Snapshot
-    snapshot_data = await fetch_database_snapshot()
-
-    # 2. Build System Instruction with Persona and Snapshot Data
-    system_instruction = build_system_instruction(snapshot_data)
-
-    # 3. Format Conversation History into Gemini Contents
-    gemini_contents = []
-    for msg in request.history:
-        role = "model" if msg.role == "assistant" else "user"
-        gemini_contents.append(
-            types.Content(
-                role=role,
-                parts=[types.Part.from_text(text=msg.content)],
-            )
-        )
-
-    # Append current user message
-    gemini_contents.append(
-        types.Content(
-            role="user",
-            parts=[types.Part.from_text(text=user_msg)],
-        )
-    )
-
-    # 4. Initialize Gemini Client & Dynamically Generate Response
     api_key = os.getenv("GEMINI_API_KEY")
-    client = genai.Client(api_key=api_key)
+    if not api_key or api_key == "your-gemini-api-key":
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="GEMINI_API_KEY is not configured on the server.")
 
+    snapshot_data = await fetch_database_snapshot()
     config = types.GenerateContentConfig(
-        system_instruction=system_instruction,
-        temperature=0.4,
+        system_instruction=build_system_instruction(snapshot_data),
+        temperature=0.3,
     )
 
-    primary_model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
-    candidate_models = [primary_model, "gemini-flash-lite-latest", "gemini-2.5-flash-lite", "gemini-flash-latest", "gemini-3-flash-preview"]
-    seen = set()
-    model_list = [m for m in candidate_models if not (m in seen or seen.add(m))]
+    contents = [
+        types.Content(role="model" if m.role == "assistant" else "user", parts=[types.Part.from_text(text=m.content)])
+        for m in request.history[-20:]
+    ]
+    contents.append(types.Content(role="user", parts=[types.Part.from_text(text=user_msg)]))
 
-    reply_text = ""
-    last_error = None
+    try:
+        reply_text = await asyncio.to_thread(_generate_reply, genai.Client(api_key=api_key), contents, config)
+    except Exception as e:
+        logger.error("PaveBot generation failed: %s", e)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Gemini API generation error: {e}")
 
-    import time
-    for model_name in model_list:
-        for attempt in range(2):
-            try:
-                logger.info(f"Generating content with model {model_name} (attempt {attempt+1})...")
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=gemini_contents,
-                    config=config,
-                )
-                if response and response.text:
-                    reply_text = response.text
-                    break
-            except Exception as e:
-                last_error = e
-                err_str = str(e).lower()
-                if "503" in err_str or "unavailable" in err_str or "high demand" in err_str:
-                    logger.warning(f"Model {model_name} hit 503 high demand: {e}. Retrying/falling back...")
-                    time.sleep(1.0)
-                    continue
-                break
-        if reply_text:
-            break
-
-    if not reply_text:
-        if last_error:
-            logger.error(f"Error querying Gemini API across candidate models: {last_error}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Gemini API generation error: {str(last_error)}",
-            )
-        reply_text = "No response generated."
-
-    # 5. Append Assistant Reply to History
     updated_history = list(request.history)
     updated_history.append(ChatMessage(role="user", content=user_msg))
     updated_history.append(ChatMessage(role="assistant", content=reply_text))
-
     return ChatResponse(reply=reply_text, history=updated_history)
