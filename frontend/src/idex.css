@@ -399,3 +399,4 @@ input::placeholder, textarea::placeholder { color: var(--soft) !important; }
 .google-btn:disabled { opacity: .6; cursor: wait; }
 .auth-divider { display: flex; align-items: center; gap: 12px; margin: 18px 0 4px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
 .auth-divider::before, .auth-divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.auth-note { margin-top: 14px; color: var(--muted); font-size: 14px; }

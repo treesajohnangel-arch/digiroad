@@ -385,7 +385,7 @@ async def google_sign_in(redirect_to: str = Query(..., description="Frontend URL
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Supabase is not configured.")
     if not _allowed_redirect(redirect_to):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="redirect_to is not an allowed DigiRoad address.")
-    query = urlencode({"provider": "google", "redirect_to": redirect_to})
+    query = urlencode({"provider": "google", "redirect_to": redirect_to, "prompt": "select_account"})  # always show Google account chooser
     return RedirectResponse(f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1/authorize?{query}")
 
 
