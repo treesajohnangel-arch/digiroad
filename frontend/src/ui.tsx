@@ -73,12 +73,6 @@ function App() {
 function Login() {
   const { login } = useApp();
   const nav = useNavigate();
-  const [tab, T] = useState<'login' | 'signup'>('login');
-  const [name, N] = useState('');
-  const [email, E] = useState('');
-  const [password, P] = useState('');
-  const [confirm, C] = useState('');
-  const [show, S] = useState(false);
   const [busy, B] = useState(false);
   const [error, Xe] = useState('');
 
@@ -110,37 +104,6 @@ function Login() {
     window.location.href = `${API_BASE}/api/auth/google?redirect_to=${encodeURIComponent(`${window.location.origin}/login`)}`;
   };
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    Xe('');
-    if (tab === 'signup' && password !== confirm) {
-      Xe('Passwords do not match.');
-      return;
-    }
-    B(true);
-    try {
-      const endpoint = tab === 'signup' ? 'signup' : 'login';
-      const payload = tab === 'signup'
-        ? { email, password, full_name: name }
-        : { email, password };
-      const res = await fetch(`${API_BASE}/api/auth/${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || 'Authentication failed.');
-      if (!data.access_token) throw new Error('The server did not return an access token.');
-      const profileName = data.user?.full_name || name || email;
-      login(profileName, data.user?.email || email, data.access_token, data.role === 'admin' ? 'admin' : 'public', data.refresh_token);
-      nav('/home');
-    } catch (err) {
-      Xe(err instanceof Error ? err.message : 'Authentication failed. Please try again.');
-    } finally {
-      B(false);
-    }
-  }
-
   return (
     <main className="login login-revealed ix">
       <section className="login-visual" style={{ backgroundImage: `url(${PHOTOS.wayanad})` }}>
@@ -161,23 +124,8 @@ function Login() {
       <section className="login-right">
         <div className="auth">
           <small className="caption">Road health workspace</small>
-          <h2>{tab === 'login' ? 'Log in to DigiRoad' : 'Create an account'}</h2>
-          <p>{tab === 'login' ? 'Continue to the road health workspace.' : 'Join the municipal road health workspace.'}</p>
-          <div className="tabs">
-            {(['login', 'signup'] as const).map(t => (
-              <button
-                key={t}
-                type="button"
-                className={tab === t ? 'active' : ''}
-                onClick={() => {
-                  T(t);
-                  Xe('');
-                }}
-              >
-                {t === 'login' ? 'Log in' : 'Sign up'}
-              </button>
-            ))}
-          </div>
+          <h2>Sign in to DigiRoad</h2>
+          <p>Use your Google account. New users get an account automatically.</p>
           <button type="button" className="google-btn" onClick={googleSignIn} disabled={busy}>
             <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
               <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.2l7.9 6.2C12.5 13.6 17.8 9.5 24 9.5z"/>
@@ -187,52 +135,8 @@ function Login() {
             </svg>
             Continue with Google
           </button>
-          <div className="auth-divider"><span>or use email</span></div>
-          <form onSubmit={submit}>
-            {tab === 'signup' && (
-              <label>
-                Full name
-                <input required value={name} onChange={e => N(e.target.value)} placeholder="Your name" />
-              </label>
-            )}
-            <label>
-              Email address
-              <input type="email" required value={email} onChange={e => E(e.target.value)} placeholder="you@municipality.gov.in" />
-            </label>
-            <label>
-              Password
-              <div className="pass">
-                <input
-                  type={show ? 'text' : 'password'}
-                  required
-                  minLength={6}
-                  value={password}
-                  onChange={e => P(e.target.value)}
-                  placeholder="At least 6 characters"
-                />
-                <button type="button" onClick={() => S(!show)}>
-                  {show ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
-              </div>
-            </label>
-            {tab === 'signup' && (
-              <label>
-                Confirm password
-                <input
-                  type={show ? 'text' : 'password'}
-                  required
-                  value={confirm}
-                  onChange={e => C(e.target.value)}
-                  placeholder="Re-enter password"
-                />
-              </label>
-            )}
-            {error && <div className="error">{error}</div>}
-            <button className="primary wide" disabled={busy}>
-              {busy ? 'Working…' : tab === 'login' ? 'Log in' : 'Create account'}
-              <ChevronRight size={17} />
-            </button>
-          </form>
+          {busy && <p className="auth-note">Signing you in…</p>}
+          {error && <div className="error">{error}</div>}
         </div>
       </section>
     </main>

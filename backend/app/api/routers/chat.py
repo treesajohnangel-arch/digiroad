@@ -361,27 +361,65 @@ Domain guidance:
 # ---------------------------------------------------------
 # Gemini call with model fallback
 # ---------------------------------------------------------
-_working_model: Optional[str] = None  # first model that answered; tried first next time
+_working_model: Optional[str] = None  # last model that answered; tried first next time
+_discovered_models: Optional[List[str]] = None  # flash models this API key can use (listed once per process)
+_SKIP_MODEL_WORDS = ("image", "tts", "live", "audio", "embedding", "exp", "thinking", "native")
+
+
+def _discover_models(client: genai.Client) -> List[str]:
+    """Flash models usable for chat, stable before preview, newest first. Cached after the first call."""
+    global _discovered_models
+    if _discovered_models is None:
+        try:
+            names = [
+                (m.name or "").removeprefix("models/")
+                for m in client.models.list()
+                if "generateContent" in (getattr(m, "supported_actions", None) or [])
+            ]
+        except Exception as e:
+            logger.warning("PaveBot could not list models: %s", e)
+            return []
+        names = [n for n in names if "flash" in n and not any(w in n for w in _SKIP_MODEL_WORDS)]
+        _discovered_models = sorted(names, key=lambda n: ("preview" in n, [-ord(ch) for ch in n]))
+        logger.info("PaveBot models available: %s", _discovered_models)
+    return _discovered_models
+
+
+def _thinking_for(model_name: str) -> Optional[types.ThinkingConfig]:
+    """Minimal thinking keeps chat replies fast."""
+    if "gemini-2.5" in model_name:
+        return types.ThinkingConfig(thinking_budget=0)
+    if "gemini-3" in model_name:
+        return types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW)
+    return None
 
 
 def _generate_reply(client: genai.Client, contents: List[types.Content], config: types.GenerateContentConfig) -> str:
-    """Try the last working model, the configured model and stable aliases, then any available flash model."""
-    candidates = [_working_model or "", os.getenv("GEMINI_MODEL", ""), "gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-lite-latest"]
+    """Try the last working model, the configured model, then discovered flash models. Raise with every error."""
+    candidates = [_working_model or "", os.getenv("GEMINI_MODEL", "")] + _discover_models(client)[:5]
     tried: List[str] = []
     errors: List[str] = []
 
     def attempt(model_name: str) -> str:
         global _working_model
         tried.append(model_name)
+        model_config = config.model_copy(update={"thinking_config": _thinking_for(model_name)})
         try:
-            response = client.models.generate_content(model=model_name, contents=contents, config=config)
+            try:
+                response = client.models.generate_content(model=model_name, contents=contents, config=model_config)
+            except Exception as e:
+                if "thinking" not in str(e).lower():
+                    raise
+                response = client.models.generate_content(model=model_name, contents=contents, config=config)
             text = (response.text or "").strip() if response else ""
             if text:
                 _working_model = model_name
             return text
         except Exception as e:
-            errors.append(f"{model_name}: {e}")
+            errors.append(f"{model_name}: {str(e)[:160]}")
             logger.warning("PaveBot model %s failed: %s", model_name, e)
+            if _working_model == model_name:
+                _working_model = None
             return ""
 
     for name in candidates:
@@ -389,24 +427,6 @@ def _generate_reply(client: genai.Client, contents: List[types.Content], config:
             reply = attempt(name)
             if reply:
                 return reply
-
-    # Configured names failed: ask the API which models this key can use.
-    try:
-        available = [
-            m.name.removeprefix("models/")
-            for m in client.models.list()
-            if "generateContent" in (getattr(m, "supported_actions", None) or [])
-            and "flash" in (m.name or "")
-        ]
-    except Exception as e:
-        errors.append(f"list models: {e}")
-        available = []
-    for name in sorted(available, reverse=True)[:4]:
-        if name not in tried:
-            reply = attempt(name)
-            if reply:
-                return reply
-
     raise RuntimeError("; ".join(errors) or "No model returned a reply.")
 
 
@@ -430,7 +450,7 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
         system_instruction=f"{CHAT_SYSTEM_INSTRUCTION}\nToday's date: {today}.",
         temperature=0.4,
         tools=PAVEBOT_TOOLS,
-        automatic_function_calling=types.AutomaticFunctionCallingConfig(maximum_remote_calls=6),
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(maximum_remote_calls=4),
     )
 
     contents = [
@@ -441,7 +461,7 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
 
     try:
         reply_text = await asyncio.wait_for(
-            asyncio.to_thread(_generate_reply, genai.Client(api_key=api_key), contents, config),
+            asyncio.to_thread(_generate_reply, genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=20000)), contents, config),
             timeout=50.0,
         )
     except asyncio.TimeoutError:
