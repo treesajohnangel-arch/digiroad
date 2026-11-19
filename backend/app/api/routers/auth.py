@@ -1,7 +1,9 @@
 import logging
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
-from fastapi import APIRouter, HTTPException, Depends, status
+from urllib.parse import urlencode, urlparse
+from fastapi import APIRouter, HTTPException, Depends, Query, status
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from supabase import create_client, Client
 
@@ -37,6 +39,7 @@ class UserProfile(BaseModel):
 class AuthResponse(BaseModel):
     message: str
     access_token: Optional[str] = None
+    refresh_token: Optional[str] = None
     token_type: str = "bearer"
     role: str = "public"
     user: Optional[UserProfile] = None
@@ -267,6 +270,7 @@ async def login(payload: LoginRequest):
         )
 
     access_token = sign_in_res.session.access_token
+    refresh_token = sign_in_res.session.refresh_token
     user_id = sign_in_res.user.id
 
     # Fetch profile and assigned role from public.profiles
@@ -294,6 +298,7 @@ async def login(payload: LoginRequest):
     return AuthResponse(
         message="Login successful",
         access_token=access_token,
+        refresh_token=refresh_token,
         token_type="bearer",
         role=assigned_role,
         user=UserProfile(
@@ -322,3 +327,104 @@ async def get_current_user_profile(
         created_at=current_user.get("created_at"),
         updated_at=current_user.get("updated_at"),
     )
+
+
+class GoogleSessionRequest(BaseModel):
+    access_token: str
+    refresh_token: Optional[str] = None
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+def _allowed_redirect(url: str) -> bool:
+    """Only send users back to our own frontends (blocks open redirects)."""
+    host = (urlparse(url).hostname or "").lower()
+    return host.endswith(".onrender.com") or host in {"localhost", "127.0.0.1"}
+
+
+def _profile_response(user_id: str, email: str, full_name: str, access_token: str,
+                      refresh_token: Optional[str], message: str) -> AuthResponse:
+    """Create the profiles row on first sign-in (role 'user'); never overwrite an existing role."""
+    profile: Optional[Dict[str, Any]] = None
+    try:
+        res = supabase.table("profiles").select("*").eq("id", user_id).execute()
+        if res.data:
+            profile = res.data[0]
+        else:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            profile = {"id": user_id, "email": email, "full_name": full_name, "role": "user", "updated_at": now_iso}
+            supabase.table("profiles").upsert(profile).execute()
+    except Exception as e:
+        logger.error("Failed to read/create profile for %s: %s", email, e)
+        profile = profile or {"id": user_id, "email": email, "full_name": full_name, "role": "user"}
+
+    raw_role = (profile.get("role") or "user").strip().lower()
+    role = "admin" if raw_role in ["admin", "superadmin", "administrator"] else "public"
+    return AuthResponse(
+        message=message,
+        access_token=access_token,
+        refresh_token=refresh_token,
+        role=role,
+        user=UserProfile(
+            id=user_id,
+            email=profile.get("email") or email,
+            full_name=profile.get("full_name") or full_name,
+            role=role,
+            created_at=profile.get("created_at"),
+            updated_at=profile.get("updated_at"),
+        ),
+    )
+
+
+@router.get("/google")
+async def google_sign_in(redirect_to: str = Query(..., description="Frontend URL to return to after Google sign-in")):
+    """Start Google sign-in through Supabase Auth. Supabase returns the user to redirect_to with tokens in the URL hash."""
+    if not settings.SUPABASE_URL:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Supabase is not configured.")
+    if not _allowed_redirect(redirect_to):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="redirect_to is not an allowed DigiRoad address.")
+    query = urlencode({"provider": "google", "redirect_to": redirect_to})
+    return RedirectResponse(f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1/authorize?{query}")
+
+
+@router.post("/google/session", response_model=AuthResponse)
+async def google_session(payload: GoogleSessionRequest):
+    """Finish Google sign-in: verify the Supabase token, require a verified email, store the profile."""
+    if supabase is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Supabase is not configured.")
+    try:
+        user = supabase.auth.get_user(payload.access_token).user
+    except Exception as e:
+        logger.warning("Google session token rejected: %s", e)
+        user = None
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Google sign-in failed. Please try again.")
+
+    meta = user.user_metadata or {}
+    if not user.email or not (user.email_confirmed_at or meta.get("email_verified")):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only verified email addresses can sign in.")
+
+    full_name = meta.get("full_name") or meta.get("name") or user.email
+    return _profile_response(user.id, user.email.lower(), full_name, payload.access_token,
+                             payload.refresh_token, "Google sign-in successful")
+
+
+@router.post("/refresh", response_model=AuthResponse)
+async def refresh_session(payload: RefreshRequest):
+    """Swap a refresh token for a fresh access token so users stay signed in across visits."""
+    auth_client = get_fresh_auth_client()
+    if not auth_client:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Supabase is not configured.")
+    try:
+        res = auth_client.auth.refresh_session(payload.refresh_token)
+    except Exception as e:
+        logger.info("Refresh failed: %s", e)
+        res = None
+    if not res or not res.session or not res.user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired. Please sign in again.")
+    meta = res.user.user_metadata or {}
+    full_name = meta.get("full_name") or meta.get("name") or res.user.email or ""
+    return _profile_response(res.user.id, (res.user.email or "").lower(), full_name,
+                             res.session.access_token, res.session.refresh_token, "Session refreshed")
