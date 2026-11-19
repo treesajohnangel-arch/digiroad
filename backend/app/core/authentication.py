@@ -28,10 +28,11 @@ def verify_jwt_token(token: str) -> Dict[str, Any]:
             claims = jwt.decode(
                 token,
                 jwt_secret,
-                algorithms=["HS256", "ES256", "HS384", "HS512"],
+                # Shared secret only verifies HMAC tokens; ES256 tokens are checked via Supabase Auth below.
+                algorithms=["HS256", "HS384", "HS512"],
                 options={"verify_aud": False},
             )
-        except jwt.PyJWTError as e:
+        except Exception as e:  # PyJWTError, or ValueError when the key type does not match
             logger.debug("JWT decode with secret failed: %s", e)
             claims = None
 
