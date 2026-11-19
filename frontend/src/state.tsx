@@ -262,28 +262,43 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     };
   }, [authToken, loggedIn, refreshAll]);
 
+  const NETWORK_MSG = 'Server not reachable (it may be waking up or redeploying). Wait 30 seconds and try again.';
+
   const notify = (s: string) => {
     setToast(s);
     window.setTimeout(() => setToast(''), 3500);
   };
 
   const markUnderProcess = async (id: string): Promise<boolean> => {
+    const send = () => fetch(`${API_BASE}/api/complaints/${encodeURIComponent(id)}/under-process`, {
+      method: 'PATCH',
+      headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined,
+    });
     try {
-      const res = await fetch(`${API_BASE}/api/complaints/${encodeURIComponent(id)}/under-process`, {
-        method: 'PATCH',
-        headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined,
-      });
-      if (res.ok) {
+      let retried = false;
+      let res: Response;
+      try {
+        res = await send();
+      } catch (err) {
+        if (!(err instanceof TypeError)) throw err;
+        // Network drop (Render cold start / redeploy): the move is idempotent, so retry once.
+        await new Promise(r => window.setTimeout(r, 4000));
+        retried = true;
+        res = await send();
+      }
+      // 409 after a retry means the first attempt already moved it.
+      if (res.ok || (retried && res.status === 409)) {
         setComplaints(prev =>
           prev.map(c => (c.id === id ? { ...c, status: 'Under Progress' } : c))
         );
-        notify(`Complaint #${id} updated to Under Process · Now active on Home`);
+        notify(`Complaint #${id} moved to Under progress`);
         return true;
       }
       const body = await res.json().catch(() => ({}));
       throw new Error(body.detail || `Status update failed (${res.status})`);
     } catch (err) {
-      notify(err instanceof Error ? err.message : 'Could not update complaint status.');
+      notify(err instanceof TypeError ? NETWORK_MSG : err instanceof Error ? err.message : 'Could not update complaint status.');
+      void refreshAll();
       return false;
     }
   };
@@ -382,7 +397,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       }
     } catch (error) {
       console.error('Repair API failed:', error);
-      notify(error instanceof Error ? error.message : 'Repair could not be saved.');
+      // No auto-retry here: repeating a patch would apply the formula twice.
+      notify(error instanceof TypeError ? NETWORK_MSG : error instanceof Error ? error.message : 'Repair could not be saved.');
+      void refreshAll();
       return false;
     }
 
