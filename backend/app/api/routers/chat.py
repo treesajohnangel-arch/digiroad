@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -380,7 +381,7 @@ def _discover_models(client: genai.Client) -> List[str]:
             logger.warning("PaveBot could not list models: %s", e)
             return []
         names = [n for n in names if "flash" in n and not any(w in n for w in _SKIP_MODEL_WORDS)]
-        _discovered_models = sorted(names, key=lambda n: ("preview" in n, [-ord(ch) for ch in n]))
+        _discovered_models = sorted(names, key=lambda n: ("preview" in n, "lite" not in n, [-ord(ch) for ch in n]))
         logger.info("PaveBot models available: %s", _discovered_models)
     return _discovered_models
 
@@ -395,38 +396,44 @@ def _thinking_for(model_name: str) -> Optional[types.ThinkingConfig]:
 
 
 def _generate_reply(client: genai.Client, contents: List[types.Content], config: types.GenerateContentConfig) -> str:
-    """Try the last working model, the configured model, then discovered flash models. Raise with every error."""
-    candidates = [_working_model or "", os.getenv("GEMINI_MODEL", "")] + _discover_models(client)[:5]
-    tried: List[str] = []
+    """Ask up to 4 models at once and return the first answer, so one overloaded model cannot stall the chat."""
+    global _working_model
+    candidates: List[str] = []
+    for name in [_working_model or "", os.getenv("GEMINI_MODEL", "")] + _discover_models(client):
+        if name and name not in candidates:
+            candidates.append(name)
+    candidates = candidates[:4]
     errors: List[str] = []
 
     def attempt(model_name: str) -> str:
-        global _working_model
-        tried.append(model_name)
         model_config = config.model_copy(update={"thinking_config": _thinking_for(model_name)})
         try:
-            try:
-                response = client.models.generate_content(model=model_name, contents=contents, config=model_config)
-            except Exception as e:
-                if "thinking" not in str(e).lower():
-                    raise
-                response = client.models.generate_content(model=model_name, contents=contents, config=config)
-            text = (response.text or "").strip() if response else ""
-            if text:
-                _working_model = model_name
-            return text
+            response = client.models.generate_content(model=model_name, contents=contents, config=model_config)
         except Exception as e:
-            errors.append(f"{model_name}: {str(e)[:160]}")
-            logger.warning("PaveBot model %s failed: %s", model_name, e)
-            if _working_model == model_name:
-                _working_model = None
-            return ""
+            if "thinking" not in str(e).lower():
+                raise
+            response = client.models.generate_content(model=model_name, contents=contents, config=config)
+        text = (response.text or "").strip() if response else ""
+        if not text:
+            raise RuntimeError("empty reply")
+        return text
 
-    for name in candidates:
-        if name and name not in tried:
-            reply = attempt(name)
-            if reply:
-                return reply
+    pool = ThreadPoolExecutor(max_workers=len(candidates) or 1)
+    futures = {pool.submit(attempt, name): name for name in candidates}
+    try:
+        for future in as_completed(futures):
+            name = futures[future]
+            try:
+                text = future.result()
+            except Exception as e:
+                errors.append(f"{name}: {str(e)[:160]}")
+                logger.warning("PaveBot model %s failed: %s", name, e)
+                continue
+            _working_model = name
+            return text
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)  # don't wait for slower models
+    _working_model = None
     raise RuntimeError("; ".join(errors) or "No model returned a reply.")
 
 
