@@ -643,7 +643,6 @@ function Home() {
               </span>
             ))}
           </div>
-          <small className="map-credit">© OpenStreetMap contributors · Live condition overlay</small>
         </div>
       </section>
 
@@ -713,9 +712,28 @@ function MapLines({
   segments: Segment[];
 }) {
   const map = useMap();
+  const fitted = React.useRef(false);
   React.useEffect(() => {
     if (selected) map.flyToBounds(selected.coords, { padding: [55, 55], duration: 0.7 });
   }, [selected, map]);
+  React.useEffect(() => {
+    // Open on the whole corridor once real coordinates arrive.
+    const all = segments.flatMap(s => s.coords);
+    if (fitted.current || all.length < 2) return;
+    map.fitBounds(all, { padding: [40, 40] });
+    fitted.current = true;
+  }, [segments, map]);
+  React.useEffect(() => {
+    // Wheel zoom only after the map is clicked, so scrolling the page never gets trapped.
+    const on = () => map.scrollWheelZoom.enable();
+    const off = () => map.scrollWheelZoom.disable();
+    map.on('click', on);
+    map.on('mouseout', off);
+    return () => {
+      map.off('click', on);
+      map.off('mouseout', off);
+    };
+  }, [map]);
 
   return (
     <>
@@ -749,13 +767,26 @@ function LeafletMap({
   segments: Segment[];
 }) {
   const [tilesFailed, fail] = useState(false);
-  const mapProps = { center: [8.6262, 76.9105], zoom: 15, scrollWheelZoom: false, zoomControl: false, className: 'leaflet' } as React.ComponentProps<
+  const tileStats = React.useRef({ ok: 0, err: 0 });
+  const mapProps = { center: [8.6262, 76.9105], zoom: 15, maxZoom: 19, scrollWheelZoom: false, zoomControl: false, className: 'leaflet' } as React.ComponentProps<
     typeof MapContainer
   >;
   const tileProps = {
-    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attribution: '&copy; OpenStreetMap contributors',
-    eventHandlers: { tileerror: () => fail(true) },
+    // Official OSM tile server (the a/b/c subdomains are deprecated).
+    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors',
+    eventHandlers: {
+      tileload: () => {
+        tileStats.current.ok += 1;
+        fail(false);
+      },
+      // Show the fallback only when tiles fail outright, not on one dropped tile.
+      tileerror: () => {
+        tileStats.current.err += 1;
+        if (tileStats.current.ok === 0 && tileStats.current.err >= 4) fail(true);
+      },
+    },
   } as React.ComponentProps<typeof TileLayer>;
 
   return (

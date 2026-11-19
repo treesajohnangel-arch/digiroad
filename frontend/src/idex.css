@@ -379,3 +379,10 @@ input::placeholder, textarea::placeholder { color: var(--soft) !important; }
   .ix-rail { padding-left: 16px; padding-right: 16px; scroll-padding-left: 16px; }
   .shell .content > :is(.chart-panel, .control-panel, .trend-summary, .admin-stats, .result-grid, .admin-table, .running, .snapshot, .result-heading) { width: calc(100% - 32px); }
 }
+
+/* Proper OSM view: seam-free tiles at fractional display scaling, visible OSM attribution */
+.leaflet-container { background: #f2efe9 !important; font-family: var(--sans); }
+.leaflet-control-attribution { display: block !important; background: rgba(255, 255, 255, .85) !important; color: #333 !important; font: 11px/1.4 var(--sans) !important; padding: 2px 6px !important; }
+.leaflet-control-attribution a { color: #0073cf !important; }
+/* Leaflet's plus-lighter blend leaves bright seams between tiles at 125%/150% display scaling; normal blend over the OSM land colour hides them */
+.leaflet-container img.leaflet-tile { mix-blend-mode: normal !important; }
