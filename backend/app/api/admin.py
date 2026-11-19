@@ -8,7 +8,7 @@ from app.services.supabase_client import supabase
 from app.schemas.complaint import ComplaintStatus
 from app.api.complaints import IN_MEMORY_COMPLAINTS
 from app.api.home import MOCK_ROAD_SEGMENTS
-from app.services.decay_model import get_health_color_hex
+from app.services.decay_model import calculate_road_health, get_health_color_hex
 from app.core.authentication import require_admin
 
 logger = logging.getLogger(__name__)
@@ -29,32 +29,12 @@ def normalize_segment_id(seg_id: str) -> str:
 
 
 def classify_repair_health(pci: float) -> str:
-    """
-    Health Status according to repair specifications:
-      PCI >= 85 -> Good
-      60 <= PCI < 85 -> Fair
-      40 <= PCI < 60 -> Poor
-      PCI < 40 -> Very Poor
-    """
-    pci_val = float(pci)
-    if pci_val >= 85.0:
-        return "Good"
-    elif pci_val >= 60.0:
-        return "Fair"
-    elif pci_val >= 40.0:
-        return "Poor"
-    else:
-        return "Very Poor"
+    """Same bands as the weekly decay model, so a repair and the next weekly run never disagree."""
+    return calculate_road_health(pci)
 
 
 def get_repair_color(health: str) -> str:
-    colors = {
-        "Good": "#10B981",       # Green
-        "Fair": "#F59E0B",       # Yellow / Amber
-        "Poor": "#EF4444",       # Red
-        "Very Poor": "#991B1B",  # Maroon
-    }
-    return colors.get(health, "#991B1B")
+    return get_health_color_hex(health)
 
 
 class AdminRepairInput(BaseModel):
@@ -295,8 +275,8 @@ async def execute_repair(payload: AdminRepairInput):
         patching_new = 0.0
         iri_new = 1.2
         pci_new = 100.0
-        health_status = "Good"
-        color_hex = "#10B981"
+        health_status = classify_repair_health(pci_new)
+        color_hex = get_repair_color(health_status)
 
     segment_metrics = SegmentRepairMetrics(
         segment_id=target_segment_id,
@@ -337,10 +317,18 @@ async def execute_repair(payload: AdminRepairInput):
             try:
                 # Direct update user_complaints
                 cid_val = int(payload.complaint_id) if payload.complaint_id.isdigit() else payload.complaint_id
-                supabase.table("user_complaints").update({
+                complaint_update = {
                     "status": ComplaintStatus.REPAIRED.value,
                     "repaired_at": now,
-                }).eq("complaint_id", cid_val).execute()
+                    "repair_type": repair_type,
+                }
+                try:
+                    supabase.table("user_complaints").update(complaint_update).eq("complaint_id", cid_val).execute()
+                except Exception as col_err:
+                    # Older schemas have no repair_type column; still close the complaint.
+                    logger.warning(f"repair_type not saved ({col_err}); updating status only.")
+                    complaint_update.pop("repair_type")
+                    supabase.table("user_complaints").update(complaint_update).eq("complaint_id", cid_val).execute()
 
                 # Direct update dynamic_road_evaluations
                 dyn_payload = {

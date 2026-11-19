@@ -136,7 +136,11 @@ async def get_map_data():
         patching_pct = float(dyn.get("patching_pct") if dyn.get("patching_pct") is not None else seg.get("patching_pct", 0.0))
         iri_m_km = float(dyn.get("iri_m_km") if dyn.get("iri_m_km") is not None else seg.get("iri_m_km", 1.2))
         pothole_pct = float(dyn.get("pothole_pct") if dyn.get("pothole_pct") is not None else seg.get("pothole_pct", 0.0))
-        rut_depth_mm = float(dyn.get("rut_depth_mm", dyn.get("rutting_mm", seg.get("rut_depth_mm", 0.0))))
+        # First non-null rutting value: dynamic table (either column name), then the static segment row.
+        rut_depth_mm = float(next(
+            (v for v in (dyn.get("rut_depth_mm"), dyn.get("rutting_mm"), seg.get("rut_depth_mm"), seg.get("rutting_mm")) if v is not None),
+            0.0,
+        ))
 
         coords = ROAD_GEOMETRY.get(seg_id) or seg.get("coordinates")
         if not coords:

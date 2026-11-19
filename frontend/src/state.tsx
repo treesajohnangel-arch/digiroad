@@ -134,10 +134,11 @@ export const defaultSegments: Segment[] = [
   },
 ];
 
+// Same bands as the backend decay model (app/services/decay_model.py: calculate_road_health).
 export function classifyHealth(pci: number): Health {
   if (pci >= 85) return 'Good';
-  if (pci >= 60) return 'Fair';
-  if (pci >= 40) return 'Poor';
+  if (pci >= 70) return 'Fair';
+  if (pci >= 55) return 'Poor';
   return 'Very Poor';
 }
 
@@ -154,6 +155,7 @@ type AppState = {
   recentRepairIds: string[];
   archivedRepairIds: string[];
   refreshRepairBuckets: () => Promise<void>;
+  liveData: boolean; // true once road values have loaded from dynamic_road_evaluations
   addComplaint: (c: Omit<Complaint, 'id' | 'status' | 'created'>) => Promise<boolean>;
   markUnderProcess: (id: string) => Promise<boolean>;
   repair: (id: string) => void;
@@ -177,6 +179,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [complaints, setComplaints] = useState<Complaint[]>([]);
   const [recentRepairIds, setRecentRepairIds] = useState<string[]>([]);
   const [archivedRepairIds, setArchivedRepairIds] = useState<string[]>([]);
+  const [liveData, setLiveData] = useState(false);
   const [trendLogs, setTrendLogs] = useState<Record<string, TrendPoint[]>>({});
   const [toast, setToast] = useState('');
 
@@ -204,16 +207,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }
   }, [authToken]);
 
-  useEffect(() => {
-    if (!authToken || !loggedIn) return;
-    let alive = true;
+  // Reload complaints (all users) and live road values (dynamic_road_evaluations) from the backend.
+  const refreshAll = useCallback(async () => {
+    if (!authToken) return;
     const headers = { Authorization: `Bearer ${authToken}` };
-    Promise.all([
-      fetch(`${API_BASE}/api/complaints`, { headers }).then(res => (res.ok ? res.json() : null)),
-      fetch(`${API_BASE}/api/home/map-data`).then(res => (res.ok ? res.json() : null)),
+    await Promise.all([
+      fetch(`${API_BASE}/api/complaints`, { headers }).then(res => (res.ok ? res.json() : null)).catch(() => null),
+      fetch(`${API_BASE}/api/home/map-data`).then(res => (res.ok ? res.json() : null)).catch(() => null),
     ])
       .then(([apiComplaints, mapData]) => {
-        if (!alive) return;
         if (Array.isArray(apiComplaints)) {
           const apiRows = (apiComplaints as ApiComplaint[]).map(fromApiComplaint);
           setComplaints(apiRows);
@@ -236,15 +238,29 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
               coords: coords.length ? coords : [[8.6321, 76.9206], [8.6267, 76.9159]],
             };
           });
-          if (segs.length) setSegmentsList(segs);
+          if (segs.length) {
+            setSegmentsList(segs);
+            setLiveData(true);
+          }
         }
-      })
-      .catch(() => {});
-    void refreshRepairBuckets();
+      });
+    await refreshRepairBuckets();
+  }, [authToken, refreshRepairBuckets]);
+
+  useEffect(() => {
+    if (!authToken || !loggedIn) return;
+    void refreshAll();
+    // Poll so complaints from other users, admin status changes and the weekly road update appear without re-login.
+    const timer = window.setInterval(() => {
+      if (!document.hidden) void refreshAll();
+    }, 30000);
+    const onFocus = () => void refreshAll();
+    window.addEventListener('focus', onFocus);
     return () => {
-      alive = false;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
     };
-  }, [authToken, loggedIn, refreshRepairBuckets]);
+  }, [authToken, loggedIn, refreshAll]);
 
   const notify = (s: string) => {
     setToast(s);
@@ -465,6 +481,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       recentRepairIds,
       archivedRepairIds,
       refreshRepairBuckets,
+      liveData,
       addComplaint,
       markUnderProcess,
       repair,
@@ -473,7 +490,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       toast,
       notify,
     }),
-    [role, user, authToken, loggedIn, segmentsList, complaints, recentRepairIds, archivedRepairIds, refreshRepairBuckets, trendLogs, toast]
+    [role, user, authToken, loggedIn, segmentsList, complaints, recentRepairIds, archivedRepairIds, refreshRepairBuckets, liveData, trendLogs, toast]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
