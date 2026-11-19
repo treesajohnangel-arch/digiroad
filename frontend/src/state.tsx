@@ -228,12 +228,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             return {
               id: p.segment_id,
               name: p.road_name || p.segment_id,
-              cracking: Number((p.cracking_pct || 0).toFixed(2)),
-              raveling: Number((p.raveling_pct || 0).toFixed(2)),
-              rutting: Number((p.rut_depth_mm || 0).toFixed(2)),
-              patching: Number((p.patching_pct || 0).toFixed(2)),
-              iri: Number((p.iri_m_km || 1.2).toFixed(2)),
-              pci: Math.round(p.pci_score || 0),
+              cracking: p.cracking_pct ?? 0,
+              raveling: p.raveling_pct ?? 0,
+              rutting: p.rut_depth_mm ?? 0,
+              patching: p.patching_pct ?? 0,
+              iri: p.iri_m_km ?? 1.2,
+              pci: p.pci_score ?? 0,
               health: (p.road_health as Health) || classifyHealth(p.pci_score || 0),
               coords: coords.length ? coords : [[8.6321, 76.9206], [8.6267, 76.9159]],
             };
@@ -380,7 +380,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         databasePersisted = data.database_persisted === true;
         const m = data.segment_metrics;
         if (m) {
-          newPci = Math.round(m.pci_score);
+          newPci = m.pci_score;
           newHealth = m.road_health as Health;
           newCracking = m.cracking_pct;
           newRaveling = m.raveling_pct;
@@ -414,11 +414,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         if (s.id === targetSegment.id) {
           return {
             ...s,
-            cracking: Number(newCracking.toFixed(2)),
-            raveling: Number(newRaveling.toFixed(2)),
-            rutting: Number(newRutting.toFixed(2)),
-            patching: Number(newPatching.toFixed(2)),
-            iri: Number(newIri.toFixed(2)),
+            cracking: newCracking,
+            raveling: newRaveling,
+            rutting: newRutting,
+            patching: newPatching,
+            iri: newIri,
             pci: newPci,
             health: newHealth,
           };
