@@ -437,7 +437,7 @@ const HERO_SLIDES = [
 ];
 
 function Home() {
-  const { complaints, addComplaint, segments, recentRepairIds, refreshRepairBuckets, liveData } = useApp();
+  const { complaints, addComplaint, segments, liveData } = useApp();
   const [selected, Sel] = useState<Segment | null>(null);
   const [query, Q] = useState('');
   const [modal, Modal] = useState(false);
@@ -450,8 +450,7 @@ function Home() {
 
   const fresh = complaints.filter(c => c.status === 'nil');
   const under = complaints.filter(c => c.status === 'Under Progress');
-  React.useEffect(() => { void refreshRepairBuckets(); }, [refreshRepairBuckets]);
-  const done = complaints.filter(c => c.status === 'Repaired' && recentRepairIds.includes(c.id));
+  const done = complaints.filter(c => c.status === 'Repaired');
   const results = segments.filter(
     s => s.name.toLowerCase().includes(query.toLowerCase()) || s.id.toLowerCase().includes(query.toLowerCase())
   );
