@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends
+import logging
+from fastapi import FastAPI, Depends, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 
@@ -48,6 +50,17 @@ allowed_origins = [
     "http://127.0.0.1:3000",
     "http://127.0.0.1:8000",
 ]
+
+@app.middleware("http")
+async def catch_unhandled_errors(request: Request, call_next):
+    """Turn crashes into JSON 500s. Registered before CORS so CORS wraps it and the
+    browser sees the real error instead of an opaque 'Failed to fetch'."""
+    try:
+        return await call_next(request)
+    except Exception as e:
+        logging.getLogger(__name__).exception("Unhandled error on %s %s", request.method, request.url.path)
+        return JSONResponse(status_code=500, content={"detail": f"Server error: {type(e).__name__}: {e}"})
+
 
 app.add_middleware(
     CORSMiddleware,
