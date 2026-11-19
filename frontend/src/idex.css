@@ -161,7 +161,7 @@ h1, h2, h3, h4, .heading h1, .section-head h2, .section-title h2, .chart-panel h
 .searchbox kbd { display: none; }
 .searchbox .results { border-radius: 0; border: 2px solid var(--ink); box-shadow: 0 20px 40px #0b0d1022; background: #fff; }
 .map-wrap { height: 560px; border: 0 !important; border-radius: 0 !important; background: #e5e7eb; }
-.leaflet-tile { filter: grayscale(.6) contrast(1.05); }
+.leaflet-tile { filter: none !important; } /* original OpenStreetMap colours */
 .map-location, .legend { background: var(--ink) !important; color: #fff !important; border: 0 !important; border-radius: 0 !important; box-shadow: none !important; }
 .map-location small { color: #9ca3af; border-color: #ffffff33; }
 .map-location, .legend b { color: #fff !important; }
