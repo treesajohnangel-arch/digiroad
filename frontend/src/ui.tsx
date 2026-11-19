@@ -67,32 +67,6 @@ function App() {
   );
 }
 
-function Brand() {
-  return (
-    <div className="brand">
-      <LogoMark />
-      <b>DIGIROAD</b>
-    </div>
-  );
-}
-
-function LogoMark() {
-  return (
-    <svg className="brand-mark" viewBox="0 0 100 68" aria-hidden="true">
-      <defs>
-        <linearGradient id="roadmark" x1="15%" y1="90%" x2="90%" y2="10%">
-          <stop offset="0" stopColor="#176d72" />
-          <stop offset="1" stopColor="#18c4c5" />
-        </linearGradient>
-      </defs>
-      <path d="M8 62c0-15 7-27 22-37C42 17 49 12 49 4" />
-      <path d="M29 62c0-12 6-21 17-29C58 24 63 15 64 7" />
-      <path d="M50 62c1-9 7-15 18-20 9-4 16-10 21-18" />
-      <path d="M69 62c6-6 14-9 24-10" />
-    </svg>
-  );
-}
-
 function Login() {
   const { login } = useApp();
   const nav = useNavigate();
@@ -104,16 +78,6 @@ function Login() {
   const [show, S] = useState(false);
   const [busy, B] = useState(false);
   const [error, Xe] = useState('');
-  const [intro, setIntro] = useState(true);
-
-  useEffect(() => {
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      setIntro(false);
-      return;
-    }
-    const timer = window.setTimeout(() => setIntro(false), 1450);
-    return () => window.clearTimeout(timer);
-  }, []);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -147,12 +111,7 @@ function Login() {
   }
 
   return (
-    <main className={`login ${intro ? 'login-intro-active' : 'login-revealed'}`}>
-      {intro && (
-        <div className="brand-intro" aria-hidden="true">
-          <div className="brand-intro-lockup"><LogoMark /><b>DIGIROAD</b></div>
-        </div>
-      )}
+    <main className="login login-revealed">
       <section className="login-visual" style={{ backgroundImage: `url(${PHOTOS.ghat})` }}>
         <span className="era-logo">DigiRoad</span>
         <div className="login-visual-copy">
@@ -160,7 +119,7 @@ function Login() {
           <h1>
             Every road,
             <br />
-            <em>read closely.</em>
+            <em>read closely</em>
           </h1>
           <p>Pavement condition, decay forecasts and citizen repair reports for the MDR47 corridor, in one place.</p>
         </div>
@@ -168,8 +127,8 @@ function Login() {
       <section className="login-right">
         <div className="auth">
           <small className="caption">Road health workspace</small>
-          <h2>{tab === 'login' ? 'Welcome back' : 'Create an account'}</h2>
-          <p>{tab === 'login' ? 'Sign in to continue to your workspace.' : 'Join the municipal road health workspace.'}</p>
+          <h2>{tab === 'login' ? 'Log in to DigiRoad' : 'Create an account'}</h2>
+          <p>{tab === 'login' ? 'Continue to the road health workspace.' : 'Join the municipal road health workspace.'}</p>
           <div className="tabs">
             {(['login', 'signup'] as const).map(t => (
               <button
@@ -226,7 +185,7 @@ function Login() {
             )}
             {error && <div className="error">{error}</div>}
             <button className="primary wide" disabled={busy}>
-              {busy ? 'Working…' : tab === 'login' ? 'Sign in to workspace' : 'Create account'}
+              {busy ? 'Working…' : tab === 'login' ? 'Log in' : 'Create account'}
               <ChevronRight size={17} />
             </button>
           </form>
@@ -282,8 +241,16 @@ function Shell() {
   const location = useLocation();
   const [menu, setMenu] = useState(false);
   const onHome = location.pathname === '/home';
+  const [pastHero, setPastHero] = useState(false);
   useReveal([location.pathname, segments.length]);
   useEffect(() => setMenu(false), [location.pathname]);
+  useEffect(() => {
+    // Header turns solid once the dark hero has scrolled away, so its light text stays readable.
+    const onScroll = () => setPastHero(window.scrollY > window.innerHeight - 90);
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, [location.pathname]);
 
   const avgPci = useMemo(() => {
     if (!segments.length) return 0;
@@ -297,7 +264,7 @@ function Shell() {
   };
 
   return (
-    <div className={`shell ${onHome ? 'on-hero' : ''} ${menu ? 'menu-open' : ''}`}>
+    <div className={`shell ${onHome ? 'on-hero' : ''} ${onHome && pastHero ? 'past-hero' : ''} ${menu ? 'menu-open' : ''}`}>
       <header className="era-head">
         <NavLink to="/home" className="era-logo">DigiRoad</NavLink>
         <nav className="era-links" aria-label="Primary">
@@ -341,7 +308,7 @@ function Shell() {
           <div className="era-foot-top">
             <span className="era-foot-mark">DigiRoad</span>
             <button className="era-pill light" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
-              To top ↑
+              Back to top
             </button>
           </div>
           <div className="era-foot-grid">
@@ -363,7 +330,7 @@ function Shell() {
             </div>
           </div>
           <div className="era-foot-base">
-            <span>© {new Date().getFullYear()} DigiRoad · Pavement intelligence</span>
+            <span>© {new Date().getFullYear()} DigiRoad · MDR47 road health workspace</span>
             <span>Map data © OpenStreetMap contributors</span>
           </div>
         </footer>
@@ -465,7 +432,7 @@ function Home() {
           <h1>
             Every road,
             <br />
-            <em>read closely.</em>
+            <em>read closely</em>
           </h1>
         </div>
         <div className="era-hero-foot">
@@ -474,7 +441,7 @@ function Home() {
             <button className={night ? 'on' : ''} onClick={() => setNight(true)}>By night</button>
           </div>
           <a href="#corridor-intro" className="era-scroll">Scroll</a>
-          <span className="era-count">0{night ? 2 : 1} / 02</span>
+          <span className="era-count">{night ? 2 : 1} / 2</span>
         </div>
       </section>
 
@@ -484,7 +451,7 @@ function Home() {
           <h2>
             Three kilometres of road,
             <br />
-            <em>measured every day.</em>
+            <em>measured every day</em>
           </h2>
           <p>
             DigiRoad watches the MDR47 corridor in Thiruvananthapuram segment by segment. It combines live condition
@@ -497,7 +464,7 @@ function Home() {
         <div className="era-stats" data-reveal>
           <div>
             <small>Segments monitored</small>
-            <b>{String(segments.length).padStart(2, '0')}</b>
+            <b>{segments.length}</b>
           </div>
           <div>
             <small>Average PCI</small>
@@ -505,7 +472,7 @@ function Home() {
           </div>
           <div>
             <small>Open complaints</small>
-            <b>{String(under.length).padStart(2, '0')}</b>
+            <b>{under.length}</b>
           </div>
           <div>
             <small>Needs attention</small>
@@ -520,7 +487,7 @@ function Home() {
           <h2>
             Three ways we keep
             <br />
-            <em>the road honest.</em>
+            <em>the road honest</em>
           </h2>
         </div>
         <div className="era-service-list">
@@ -542,11 +509,11 @@ function Home() {
         <div className="section-head">
           <div>
             <div className="kicker">Spatial condition model</div>
-            <h2>The corridor, <em>segment by segment.</em></h2>
+            <h2>The corridor, <em>segment by segment</em></h2>
           </div>
           <div className="searchbox">
             <Search size={15} />
-            <input id="road-search" placeholder="Find a road segment…" value={query} onChange={e => Q(e.target.value)} />
+            <input id="road-search" placeholder="Search segments" value={query} onChange={e => Q(e.target.value)} />
             {query && (
               <div className="results">
                 {results.map(s => (
@@ -570,10 +537,10 @@ function Home() {
         <div className="map-wrap">
           <LeafletMap selected={selected} onSelect={Sel} segments={segments} />
           <div className="map-location">
-            <MapPin size={14} /> POTHENCODE <small>8.62° N · 76.91° E</small>
+            <MapPin size={14} /> Pothencode <small>8.62° N · 76.91° E</small>
           </div>
           <div className="legend">
-            <b>ROAD CONDITION</b>
+            <b>Road condition</b>
             {(['Very Poor', 'Poor', 'Fair', 'Good'] as Health[]).map(h => (
               <span key={h}>
                 <i className={`dot ${hc(h)}`} />
@@ -585,33 +552,21 @@ function Home() {
         </div>
       </section>
 
-      <section className="era-segments">
+      <section className="era-segments era-segments-stack">
         <div className="era-section-head" data-reveal>
           <small className="caption">Monitored segments</small>
           <h2>
             Choose a segment,
             <br />
-            <em>see its condition.</em>
+            <em>see its condition</em>
           </h2>
+          <p>
+            The deck turns on its own. Hover or tap it to fan the segments out, then pick one to open its PCI, roughness
+            and distress readings.
+          </p>
         </div>
-        <div className="era-seg-grid">
-          {segments.map((s, i) => (
-            <button className={`era-seg ${selected?.id === s.id ? 'picked' : ''}`} key={s.id} onClick={() => Sel(s)} data-reveal>
-              <span className="era-seg-top">
-                <span className="era-num">{String(i + 1).padStart(2, '0')}</span>
-                <HealthTag h={s.health} />
-              </span>
-              <span className="era-seg-id">{s.id}</span>
-              <span className="era-seg-name">{s.name}</span>
-              <span className="era-seg-stats">
-                <span><small>PCI</small><b>{s.pci}</b></span>
-                <span><small>IRI m/km</small><b>{s.iri}</b></span>
-                <span><small>Cracking</small><b>{s.cracking}%</b></span>
-                <span><small>Rutting</small><b>{s.rutting} mm</b></span>
-              </span>
-              <span className="era-link">Explore segment <ChevronRight size={14} /></span>
-            </button>
-          ))}
+        <div data-reveal>
+          <CardStack segments={segments} onPick={Sel} />
         </div>
       </section>
 
@@ -620,7 +575,7 @@ function Home() {
           <div>
             <div className="kicker">Citizen feedback</div>
             <h2>
-              Complaints tracker <small>{String(complaints.length).padStart(2, '0')}</small>
+              Complaints tracker <small>{complaints.length}</small>
             </h2>
           </div>
           <button className="link-button" onClick={() => Modal(true)}>
@@ -631,7 +586,7 @@ function Home() {
           <ComplaintTable
             title="Under progress"
             entries={under}
-            empty="No active complaints (All clear)"
+            empty="No open complaints"
             onSelectComplaint={setSelectedComplaint}
           />
           <ComplaintTable
@@ -647,9 +602,9 @@ function Home() {
         <div className="era-cta-inner" data-reveal>
           <small className="caption">Seen something on the road?</small>
           <h2>
-            Tell us where it hurts.
+            Tell us where it hurts
             <br />
-            <em>We'll track the repair.</em>
+            <em>We'll track the repair</em>
           </h2>
           <div className="era-cta-actions">
             <button className="era-pill light" onClick={() => Modal(true)}>Report an issue</button>
@@ -665,6 +620,77 @@ function Home() {
       {selectedComplaint && <ComplaintDetailModal complaint={selectedComplaint} close={() => setSelectedComplaint(null)} />}
       {bot && <PaveBot close={() => BotOpen(false)} />}
     </>
+  );
+}
+
+// Card-stack reveal: a 3D deck that fans out into a list on hover, focus or tap.
+const STACK_PHOTOS = [PHOTOS.ghat, PHOTOS.avenue, PHOTOS.flood, PHOTOS.hill, PHOTOS.night];
+const CARD_H = 112; // px, card height
+const PEEK = 30; // px of each back card left visible when stacked
+const GAP = 14; // px between cards when fanned out
+
+function CardStack({ segments, onPick }: { segments: Segment[]; onPick: (s: Segment) => void }) {
+  const [open, setOpen] = useState(false);
+  const count = segments.length;
+
+  if (!count) return null;
+  const height = open ? count * CARD_H + (count - 1) * GAP : (count - 1) * PEEK + CARD_H;
+
+  return (
+    <div
+      className={`card-stack ${open ? 'open' : ''}`}
+      style={{ height }}
+      tabIndex={0}
+      role="group"
+      aria-label={open ? 'Segment list' : 'Segment deck, press Enter to expand'}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={e => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setOpen(false);
+      }}
+      onClick={() => setOpen(true)}
+    >
+      {segments.map((s, i) => {
+        // Slot 0 is the back of the deck, count-1 the front.
+        const slot = i;
+        const depth = count - 1 - slot;
+        const y = open ? slot * (CARD_H + GAP) : slot * PEEK;
+        return (
+          <button
+            key={s.id}
+            className="stack-card"
+            tabIndex={open ? 0 : -1}
+            onClick={e => {
+              e.stopPropagation();
+              if (open) onPick(s);
+              else setOpen(true);
+            }}
+            style={{
+              zIndex: slot + 1,
+              transform: open
+                ? `translateY(${y}px)`
+                : `translateY(${y}px) translateZ(${-depth * 60}px) scale(${1 - depth * 0.05})`,
+              opacity: open ? 1 : Math.max(0.4, 1 - depth * 0.22),
+              transitionDelay: open ? `${slot * 50}ms` : '0ms',
+            }}
+          >
+            <img src={STACK_PHOTOS[i % STACK_PHOTOS.length]} alt="" />
+            <span className="stack-card-text">
+              <small>{s.name.replace(/\s*\(.*\)\s*$/, '')}</small>
+              <b>Segment {s.id.split('-').pop()}</b>
+              <span>
+                PCI {s.pci} · IRI {s.iri} m/km · Cracking {s.cracking}%
+              </span>
+            </span>
+            <span className="stack-card-end">
+              <HealthTag h={s.health} />
+              <ChevronRight size={16} />
+            </span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -732,7 +758,7 @@ function LeafletMap({
         <div className="map-fallback">
           <div className="fallback-grid" />
           <RoadFallback />
-          <b>LOCAL MAP VIEW</b>
+          <b>Local map view</b>
           <span>Map tiles unavailable · road condition overlay remains interactive</span>
         </div>
       )}
@@ -766,7 +792,7 @@ function ComplaintTable({
     <div className="complaint-table">
       <div className="table-heading">
         <span>{title}</span>
-        <b>{String(entries.length).padStart(2, '0')}</b>
+        <b>{entries.length}</b>
       </div>
       {entries.length ? (
         entries.map(c => (
@@ -805,7 +831,7 @@ function SegmentModal({ segment: s, close }: { segment: Segment; close: () => vo
       <div className="modal" onClick={e => e.stopPropagation()}>
         <div className="modal-head">
           <div>
-            <div className="kicker">SEGMENT CONDITION / {s.id}</div>
+            <div className="kicker">Segment condition · {s.id}</div>
             <h2>{s.name}</h2>
           </div>
           <button className="icon-close" onClick={close}>
@@ -817,14 +843,14 @@ function SegmentModal({ segment: s, close }: { segment: Segment; close: () => vo
           <HealthTag h={s.health} />
           <b>
             {s.pci}
-            <small>PCI SCORE</small>
+            <small>PCI score</small>
           </b>
         </div>
         <div className="metric-grid">
           {[
             ['Cracking', s.cracking + '%'],
             ['Raveling', s.raveling + '%'],
-            ['Rut Depth', (s.rutting || 0) + ' mm'],
+            ['Rut depth', (s.rutting || 0) + ' mm'],
             ['Patching', (s.patching || 0) + '%'],
             ['IRI', s.iri + ' m/km'],
             ['PCI score', s.pci + '/100'],
@@ -836,7 +862,7 @@ function SegmentModal({ segment: s, close }: { segment: Segment; close: () => vo
           ))}
         </div>
         <div className="modal-foot">
-          Dynamic evaluation active
+          Live segment readings
           <button className="secondary" onClick={close}>
             Close
           </button>
@@ -877,7 +903,7 @@ function ComplaintModal({
       <div className="modal form-modal" onClick={e => e.stopPropagation()}>
         <div className="modal-head">
           <div>
-            <div className="kicker">CITIZEN FEEDBACK</div>
+            <div className="kicker">Citizen feedback</div>
             <h2>Report a road issue</h2>
           </div>
           <button className="icon-close" onClick={close}>
@@ -931,7 +957,7 @@ function ComplaintModal({
               rows={4}
               value={form.description}
               onChange={e => set('description', e.target.value)}
-              placeholder="Describe the location and condition…"
+              placeholder="Location and condition"
             />
           </label>
           <div className="form-actions">
@@ -1021,7 +1047,7 @@ function PaveBot({ close }: { close: () => void }) {
         <div ref={endRef} />
       </div>
       <div className="quick-asks">
-        <small>QUICK QUESTIONS</small>
+        <small>Quick questions</small>
         {['Which road needs attention?', 'Show complaint status', 'How has PCI changed over time?'].map(q => (
           <button key={q} onClick={() => ask(q)} disabled={busy}>
             {q}
@@ -1036,7 +1062,7 @@ function PaveBot({ close }: { close: () => void }) {
           ask();
         }}
       >
-        <input value={input} onChange={e => I(e.target.value)} placeholder="Ask about road health…" />
+        <input value={input} onChange={e => I(e.target.value)} placeholder="Ask about road health" />
         <button disabled={busy} aria-label="Send">
           <Send size={16} />
         </button>
@@ -1066,20 +1092,20 @@ function Simulations() {
   return (
     <>
       <Heading
-        eyebrow="PAVEMENT FORECAST / MECHANISTIC MODEL"
+        eyebrow="Pavement forecast · mechanistic model"
         title="Run a simulation"
         description="Forecast pavement degradation taking live segment baseline values into account."
       />
       <div className="control-panel">
         <label>
-          SIMULATION DATE
+          Simulation date
           <div className="date-input">
             <CalendarDays size={16} />
             <input type="date" value={date} onChange={e => D(e.target.value)} />
           </div>
         </label>
         <label>
-          ROAD SEGMENT
+          Road segment
           <select value={id} onChange={e => I(e.target.value)}>
             {segments.map(seg => (
               <option key={seg.id} value={seg.id}>
@@ -1111,10 +1137,10 @@ function Simulations() {
         <>
           <div className="result-heading">
             <div>
-              <span className="kicker">PROJECTED CONDITION / {date}</span>
+              <span className="kicker">Projected condition · {date}</span>
               <h2>{s.name}</h2>
             </div>
-            <span className="model-stamp">MECHANISTIC MODEL · 30 DAY HORIZON</span>
+            <span className="model-stamp">Mechanistic model · 30-day horizon</span>
           </div>
           <div className="result-grid">
             {[
@@ -1134,7 +1160,7 @@ function Simulations() {
           </div>
           <div className="chart-panel">
             <div>
-              <div className="kicker">PROJECTED DECAY</div>
+              <div className="kicker">Projected decay</div>
               <h2>Condition over 30 days</h2>
             </div>
             <div className="chart">
@@ -1203,20 +1229,20 @@ function Trends() {
   return (
     <>
       <Heading
-        eyebrow="HISTORICAL CONDITION / PCI"
+        eyebrow="Historical condition · PCI"
         title="Road health trends"
         description="Track pavement condition and repair event milestones across the corridor."
       />
       <div className="control-panel trend-controls">
         <label>
-          REFERENCE DATE
+          Reference date
           <div className="date-input">
             <CalendarDays size={16} />
             <input type="date" value={date} onChange={e => D(e.target.value)} />
           </div>
         </label>
         <label>
-          ROAD SEGMENT
+          Road segment
           <select value={id} onChange={e => I(e.target.value)}>
             {segments.map(seg => (
               <option key={seg.id} value={seg.id}>
@@ -1259,9 +1285,9 @@ function Trends() {
         <div className="chart-heading">
           <div>
             <div className="kicker">
-              PCI HISTORY / {points[0]?.fullDate.toUpperCase()} — {points[points.length - 1]?.fullDate.toUpperCase()}
+              PCI history · {points[0]?.fullDate} – {points[points.length - 1]?.fullDate}
             </div>
-            <h2>Date vs. Pavement Health Index</h2>
+            <h2>Pavement Condition Index over time</h2>
           </div>
           <span className="chart-legend">
             <i /> Pavement Condition Index (PCI)
@@ -1313,7 +1339,7 @@ function RepairHistory() {
   return (
     <>
       <Heading
-        eyebrow="MAINTENANCE / REPAIR HISTORY"
+        eyebrow="Maintenance · repair history"
         title="Repaired complaints"
         description="Historical archive of submitted and repaired road complaints across the municipal network."
       />
@@ -1339,7 +1365,7 @@ function RepairHistory() {
           value={filterSegment}
           onChange={e => setFilterSegment(e.target.value)}
         >
-          <option value="all">All Road Corridors</option>
+          <option value="all">All road corridors</option>
           {segments.map(s => (
             <option key={s.id} value={s.id}>
               {s.name} ({s.id})
@@ -1351,10 +1377,10 @@ function RepairHistory() {
       <div className="admin-table repair-history-table">
         <div className="admin-table-head">
           <b>Repair history register</b>
-          <span>{filtered.length} RECORDS · CLICK TO INSPECT</span>
+          <span>{filtered.length} records · select one to inspect</span>
         </div>
         <div className="admin-columns history-columns">
-          <span>COMPLAINT</span><span>ROAD SEGMENT</span><span>REPAIR ACTION</span><span>COMPLETED</span>
+          <span>Complaint</span><span>Road segment</span><span>Repair action</span><span>Completed</span>
         </div>
         {filtered.length ? filtered.map(c => {
           const segment = segments.find(s => s.id === c.segmentId);
@@ -1377,7 +1403,7 @@ function RepairHistory() {
               <span>{c.repairedAt ? new Date(c.repairedAt).toLocaleString() : c.created}</span>
             </div>
           );
-        }) : <div className="empty">No repaired complaints match the current filter.</div>}
+        }) : <div className="empty">No repaired complaints match this filter</div>}
       </div>
 
       {selectedComplaint && (
@@ -1409,8 +1435,8 @@ function Admin() {
         <div className="denied-icon">
           <Shield size={27} />
         </div>
-        <span className="kicker">ACCESS RESTRICTED</span>
-        <h1>Not authorized to access this page.</h1>
+        <span className="kicker">Access restricted</span>
+        <h1>Not authorized</h1>
         <p>This workspace area is available to municipal administrators.</p>
         <button className="primary" onClick={() => nav('/home')}>
           Return to Home <ChevronRight size={16} />
@@ -1477,39 +1503,39 @@ function Admin() {
   return (
     <>
       <Heading
-        eyebrow="ADMINISTRATION / COMPLAINTS & REPAIR"
+        eyebrow="Administration · complaints and repairs"
         title="Complaint management"
         description="Execute targeted asphalt patching or full road resurfacing to restore pavement condition."
       />
       <div className="admin-stats">
         <div>
           <small>All complaints</small>
-          <b>{String(complaints.length).padStart(2, '0')}</b>
+          <b>{complaints.length}</b>
         </div>
         <div>
           <small>New / nil</small>
-          <b style={{ color: '#94a3b8' }}>{String(nilCount).padStart(2, '0')}</b>
+          <b style={{ color: 'var(--navy-60)' }}>{nilCount}</b>
         </div>
         <div>
           <small>Under progress</small>
-          <b className="amber">{String(open.length).padStart(2, '0')}</b>
+          <b className="amber">{open.length}</b>
         </div>
         <div>
           <small>Repaired</small>
-          <b>{String(done.length).padStart(2, '0')}</b>
+          <b>{done.length}</b>
         </div>
       </div>
 
       <div className="admin-table">
         <div className="admin-table-head">
-          <b>Complaint register & repair actions</b>
-          <span>{complaints.length} RECORDS · CLICK ROW TO VIEW</span>
+          <b>Complaint register and repair actions</b>
+          <span>{complaints.length} records · select a row to view</span>
         </div>
         <div className="admin-columns">
-          <span>REPORT</span>
-          <span>ROAD SEGMENT</span>
-          <span>SEVERITY</span>
-          <span>STATUS / ACTIONS</span>
+          <span>Report</span>
+          <span>Road segment</span>
+          <span>Severity</span>
+          <span>Status and actions</span>
         </div>
         {complaints.map(c => {
           const seg = segments.find(s => s.id === c.segmentId);
@@ -1608,9 +1634,9 @@ function Admin() {
             <div className="modal-head">
               <div>
                 <div className="kicker" style={{ color: '#f59e0b' }}>
-                  ADMINISTRATIVE REPAIR · PATCHING WORKFLOW
+                  Administrative repair · patching
                 </div>
-                <h2>Execute Asphalt Patching</h2>
+                <h2>Asphalt patching</h2>
               </div>
               <button className="icon-close" onClick={() => !submitting && setPatchModalComplaint(null)}>
                 <X />
@@ -1655,12 +1681,12 @@ function Admin() {
               {/* Dynamic Calculation Preview */}
               <div className="calc-preview-card amber-glow">
                 <div className="calc-preview-title">
-                  <span>REAL-TIME ENGINEERING ESTIMATE</span>
-                  <span>1KM CARRIAGEWAY</span>
+                  <span>Engineering estimate</span>
+                  <span>1 km carriageway</span>
                 </div>
                 <div className="calc-preview-grid">
                   <div>
-                    <small>Patch Area</small>
+                    <small>Patch area</small>
                     <b>{patchPreview.area} m²</b>
                   </div>
                   <div>
@@ -1668,7 +1694,7 @@ function Admin() {
                     <b style={{ color: '#f59e0b' }}>+{patchPreview.addedPatchingPct}%</b>
                   </div>
                   <div>
-                    <small>Cracking Reduction</small>
+                    <small>Cracking reduction</small>
                     <b style={{ color: '#34d399' }}>-{patchPreview.crackingReduct}%</b>
                   </div>
                 </div>
@@ -1700,9 +1726,9 @@ function Admin() {
             <div className="modal-head">
               <div>
                 <div className="kicker" style={{ color: '#34d399' }}>
-                  ADMINISTRATIVE REPAIR · FULL RESURFACING
+                  Administrative repair · full resurfacing
                 </div>
-                <h2>Confirm Full Resurfacing</h2>
+                <h2>Full resurfacing</h2>
               </div>
               <button className="icon-close" onClick={() => !submitting && setResurfaceModalComplaint(null)}>
                 <X />
@@ -1714,7 +1740,7 @@ function Admin() {
             </p>
 
             <div className="confirm-details">
-              <b>Target Segment:</b>{' '}
+              <b>Target segment:</b>{' '}
               {segments.find(s => s.id === resurfaceModalComplaint.segmentId)?.name || resurfaceModalComplaint.segmentId}
               <br />
               <br />
@@ -1767,7 +1793,7 @@ function ComplaintDetailModal({
       <div className="modal complaint-detail-modal" onClick={e => e.stopPropagation()}>
         <div className="modal-head">
           <div>
-            <div className="kicker">COMPLAINT DOSSIER · {c.id}</div>
+            <div className="kicker">Complaint · {c.id}</div>
             <h2>{c.category}</h2>
           </div>
           <button className="icon-close" onClick={close} title="Close">
@@ -1777,7 +1803,7 @@ function ComplaintDetailModal({
 
         <div className="detail-status-bar">
           <div className="status-badge-wrap">
-            <span className="label">STATUS:</span>
+            <span className="label">Status</span>
             {c.status === 'nil' ? (
               <span className="status-pill nil">nil</span>
             ) : c.status === 'Under Progress' ? (
@@ -1789,13 +1815,13 @@ function ComplaintDetailModal({
             )}
           </div>
           <div className="severity-badge-wrap">
-            <span className="label">SEVERITY:</span>
+            <span className="label">Severity</span>
             <span className={`severity-text ${c.severity.toLowerCase()}`}>{c.severity}</span>
           </div>
         </div>
 
         <div className="detail-section">
-          <div className="detail-label">ROAD CORRIDOR / LOCATION</div>
+          <div className="detail-label">Road corridor · location</div>
           <div className="detail-card">
             <div className="detail-road-name">
               <MapPin size={16} />
@@ -1804,7 +1830,7 @@ function ComplaintDetailModal({
             </div>
             {seg && (
               <div className="detail-road-metrics">
-                <span>Pavement Health: <b>{seg.health}</b></span>
+                <span>Pavement health: <b>{seg.health}</b></span>
                 <span>Current PCI: <b>{seg.pci} / 100</b></span>
                 <span>Cracking: <b>{seg.cracking}%</b></span>
                 <span>IRI: <b>{seg.iri} m/km</b></span>
@@ -1814,7 +1840,7 @@ function ComplaintDetailModal({
         </div>
 
         <div className="detail-section">
-          <div className="detail-label">CITIZEN REPORT DESCRIPTION</div>
+          <div className="detail-label">Citizen report</div>
           <div className="detail-description-box">
             <p>{c.description}</p>
           </div>
@@ -1822,12 +1848,12 @@ function ComplaintDetailModal({
 
         <div className="detail-grid-two">
           <div>
-            <small>REPORTED BY</small>
+            <small>Reported by</small>
             <b>{c.citizen}</b>
             {c.contact && <span className="detail-sub">{c.contact}</span>}
           </div>
           <div>
-            <small>SUBMITTED AT</small>
+            <small>Submitted</small>
             <b>{c.created}</b>
           </div>
         </div>
@@ -1835,12 +1861,12 @@ function ComplaintDetailModal({
         {c.status === 'Repaired' && (
           <div className="detail-repair-box">
             <div>
-              <small>REPAIR ACTION COMPLETED</small>
-              <b>{c.repairType === 'PATCHING' ? 'Targeted Asphalt Patching' : 'Full Surface Resurfacing'}</b>
+              <small>Repair action</small>
+              <b>{c.repairType === 'PATCHING' ? 'Targeted asphalt patching' : 'Full resurfacing'}</b>
             </div>
             {c.repairedAt && (
               <div>
-                <small>COMPLETION DATE</small>
+                <small>Completed</small>
                 <b>{new Date(c.repairedAt).toLocaleString()}</b>
               </div>
             )}
