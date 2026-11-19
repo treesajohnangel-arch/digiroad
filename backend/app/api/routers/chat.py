@@ -231,19 +231,154 @@ Thiruvananthapuram, Kerala, split into segments MDR47-S01, MDR47-S02 and MDR47-S
 
 
 # ---------------------------------------------------------
-# Gemini call with model discovery
+# Database tools: Gemini calls these only when a question needs live data
 # ---------------------------------------------------------
+def _norm_segment(segment_id: str) -> str:
+    """'s1', 'segment 2', 'MDR47 S03' -> 'MDR47-S01' etc. Empty string means all segments."""
+    digits = "".join(ch for ch in (segment_id or "") if ch.isdigit())
+    if not digits:
+        return ""
+    num = int(digits[-2:]) if len(digits) > 2 else int(digits)  # 'MDR47 S03' -> last two digits
+    return f"MDR47-S{num:02d}"
+
+
+def get_current_road_condition(segment_id: str = "") -> Dict[str, Any]:
+    """Current condition of MDR47 road segments from dynamic_road_evaluations: PCI, road health, IRI,
+    cracking, rutting, raveling, patching, potholes, plus segment details (name, chainage, length, width).
+
+    Args:
+        segment_id: Segment like "MDR47-S01", "S2" or "segment 3". Leave empty for all segments.
+    """
+    if supabase is None:
+        return {"error": "Database is not configured."}
+    sid = _norm_segment(segment_id)
+    try:
+        dyn = supabase.table("dynamic_road_evaluations").select("*")
+        seg = supabase.table("road_segments").select("*")
+        if sid:
+            dyn, seg = dyn.eq("segment_id", sid), seg.eq("segment_id", sid)
+        return {"current_condition": dyn.execute().data or [], "segments": seg.execute().data or []}
+    except Exception as e:
+        logger.warning("PaveBot tool get_current_road_condition failed: %s", e)
+        return {"error": f"Could not read current condition: {e}"}
+
+
+def get_condition_history(segment_id: str = "", last_n_records: int = 12) -> Dict[str, Any]:
+    """Past evaluations from historic_road_evaluations, for trends, deterioration rate and
+    "how has PCI changed" questions. Returns monthly averages plus the most recent records.
+
+    Args:
+        segment_id: Segment like "MDR47-S01" or "S2". Leave empty for all segments.
+        last_n_records: How many recent raw records per segment to include (max 30).
+    """
+    if supabase is None:
+        return {"error": "Database is not configured."}
+    sid = _norm_segment(segment_id)
+    n = max(1, min(int(last_n_records or 12), 30))
+    try:
+        rows: List[Dict[str, Any]] = []
+        start = 0
+        while start < MAX_ROWS_PER_TABLE:
+            q = supabase.table("historic_road_evaluations").select("*")
+            if sid:
+                q = q.eq("segment_id", sid)
+            batch = q.range(start, start + PAGE_SIZE - 1).execute().data or []
+            rows.extend(batch)
+            if len(batch) < PAGE_SIZE:
+                break
+            start += PAGE_SIZE
+    except Exception as e:
+        logger.warning("PaveBot tool get_condition_history failed: %s", e)
+        return {"error": f"Could not read history: {e}"}
+    summary = _summarize_evaluations(rows)
+    for seg_summary in summary.values():
+        seg_summary.pop("first_row", None)
+    by_seg: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for row in sorted(rows, key=_row_time):
+        by_seg[str(row.get("segment_id"))].append(row)
+    return {
+        "summary_by_segment": summary,
+        "recent_records": {seg: seg_rows[-n:] for seg, seg_rows in by_seg.items()},
+    }
+
+
+def get_complaints(status: str = "", segment_id: str = "") -> Dict[str, Any]:
+    """Citizen complaints from user_complaints (identities removed) with counts by status, severity and
+    category. Status values: "nil" = new, "under process" = repair in progress, "repaired" = closed.
+
+    Args:
+        status: Filter: "nil", "under process" or "repaired". Leave empty for all.
+        segment_id: Segment like "MDR47-S01". Leave empty for all.
+    """
+    if supabase is None:
+        return {"error": "Database is not configured."}
+    try:
+        rows = [_strip_pii(r) for r in _fetch_all_rows("user_complaints")]
+    except Exception as e:
+        logger.warning("PaveBot tool get_complaints failed: %s", e)
+        return {"error": f"Could not read complaints: {e}"}
+    sid = _norm_segment(segment_id)
+    wanted = (status or "").strip().lower()
+    if sid:
+        rows = [r for r in rows if str(r.get("segment_id")) == sid]
+    if wanted:
+        rows = [r for r in rows if str(r.get("status") or "nil").strip().lower() == wanted]
+    rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+    return {"summary": _summarize_complaints(rows), "complaints": rows[:50]}
+
+
+PAVEBOT_TOOLS = [get_current_road_condition, get_condition_history, get_complaints]
+
+CHAT_SYSTEM_INSTRUCTION = """You are PaveBot, the friendly assistant of DigiRoad, a road-health website for the
+Vembayam - Pallipuram Road (MDR47) in Thiruvananthapuram, Kerala. The road has three ~1 km segments:
+MDR47-S01, MDR47-S02 and MDR47-S03.
+
+How to answer:
+- Talk naturally, like a helpful expert. Answer any question, including general ones (greetings, how roads
+  decay, what PCI means, maintenance methods, how to use the site) from your own knowledge without tools.
+- When a question needs DigiRoad's actual numbers (current scores, which road is worst, history/trends,
+  complaints, what repair a segment needs), call the tools first and answer only from what they return.
+  Never invent readings, dates or complaint details. If a tool returns an error or no data, say so.
+- Give exact figures as returned (do not round them), name the segment, and mention the data date.
+- For maintenance advice, combine the live scores with the guidance below and explain why.
+- Website features: Overview (map, scores, complaints tracker), Simulations, Trends, Repairs (history),
+  Admin (complaint status and repairs), "Submit a complaint" to report a road problem.
+- Reply in the user's language. Keep it concise for a narrow chat panel: short paragraphs and "-" bullets.
+  No markdown tables, headings or ** bold.
+
+Domain guidance:
+- PCI 0-100 bands used by DigiRoad: >= 85 Good, 70-84.99 Fair, 55-69.99 Poor, < 55 Very Poor.
+  If a record has road_health, report that value.
+- IRI (m/km): < 2.0 smooth, 2.0-4.0 moderate roughness, > 4.0 rough.
+- Interventions: PCI >= 85 routine maintenance; 70-85 preventive (crack sealing, fog seal, micro-surfacing);
+  55-70 rehabilitation (patching, thin overlay); 40-55 milling and HMA overlay, deep patching;
+  < 40 reconstruction or full resurfacing. Monsoon rain, heavy traffic and drainage problems speed up decay;
+  delaying repair until reconstruction can cost 4-5x more.
+- For forecasts, extrapolate from the history tool's trend and say it is an estimate.
+"""
+
+
+# ---------------------------------------------------------
+# Gemini call with model fallback
+# ---------------------------------------------------------
+_working_model: Optional[str] = None  # first model that answered; tried first next time
+
+
 def _generate_reply(client: genai.Client, contents: List[types.Content], config: types.GenerateContentConfig) -> str:
-    """Try the configured model and stable aliases, then any available flash model. Raise with every error."""
-    candidates = [os.getenv("GEMINI_MODEL", ""), "gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-lite-latest"]
+    """Try the last working model, the configured model and stable aliases, then any available flash model."""
+    candidates = [_working_model or "", os.getenv("GEMINI_MODEL", ""), "gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-lite-latest"]
     tried: List[str] = []
     errors: List[str] = []
 
     def attempt(model_name: str) -> str:
+        global _working_model
         tried.append(model_name)
         try:
             response = client.models.generate_content(model=model_name, contents=contents, config=config)
-            return (response.text or "").strip() if response else ""
+            text = (response.text or "").strip() if response else ""
+            if text:
+                _working_model = model_name
+            return text
         except Exception as e:
             errors.append(f"{model_name}: {e}")
             logger.warning("PaveBot model %s failed: %s", model_name, e)
@@ -281,7 +416,7 @@ def _generate_reply(client: genai.Client, contents: List[types.Content], config:
 @router.post("/api/chat", response_model=ChatResponse, status_code=status.HTTP_200_OK)
 @router.post("/chat", response_model=ChatResponse, status_code=status.HTTP_200_OK)
 async def chat_endpoint(request: ChatRequest) -> ChatResponse:
-    """PaveBot: answers from the full live Supabase dataset using Gemini."""
+    """PaveBot: natural conversation; reads live Supabase data through tools only when a question needs it."""
     user_msg = request.message.strip()
     if not user_msg:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message content cannot be empty.")
@@ -290,10 +425,12 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
     if not api_key or api_key == "your-gemini-api-key":
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="GEMINI_API_KEY is not configured on the server.")
 
-    snapshot_data = await fetch_database_snapshot()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     config = types.GenerateContentConfig(
-        system_instruction=build_system_instruction(snapshot_data),
-        temperature=0.3,
+        system_instruction=f"{CHAT_SYSTEM_INSTRUCTION}\nToday's date: {today}.",
+        temperature=0.4,
+        tools=PAVEBOT_TOOLS,
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(maximum_remote_calls=6),
     )
 
     contents = [
@@ -303,7 +440,12 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
     contents.append(types.Content(role="user", parts=[types.Part.from_text(text=user_msg)]))
 
     try:
-        reply_text = await asyncio.to_thread(_generate_reply, genai.Client(api_key=api_key), contents, config)
+        reply_text = await asyncio.wait_for(
+            asyncio.to_thread(_generate_reply, genai.Client(api_key=api_key), contents, config),
+            timeout=50.0,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="PaveBot took too long to answer. Please try again.")
     except Exception as e:
         logger.error("PaveBot generation failed: %s", e)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Gemini API generation error: {e}")
