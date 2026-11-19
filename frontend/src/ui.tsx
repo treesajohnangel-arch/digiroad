@@ -82,6 +82,34 @@ function Login() {
   const [busy, B] = useState(false);
   const [error, Xe] = useState('');
 
+  // Back from Google: Supabase puts the tokens in the URL hash.
+  useEffect(() => {
+    const hash = new URLSearchParams(window.location.hash.slice(1));
+    const accessToken = hash.get('access_token');
+    const hashError = hash.get('error_description');
+    if (!accessToken && !hashError) return;
+    window.history.replaceState(null, '', window.location.pathname);
+    if (hashError) { Xe(hashError); return; }
+    B(true);
+    fetch(`${API_BASE}/api/auth/google/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ access_token: accessToken, refresh_token: hash.get('refresh_token') }),
+    })
+      .then(async res => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || 'Google sign-in failed.');
+        login(data.user?.full_name || data.user?.email, data.user?.email, data.access_token, data.role === 'admin' ? 'admin' : 'public', data.refresh_token);
+        nav('/home');
+      })
+      .catch(err => Xe(err instanceof Error ? err.message : 'Google sign-in failed.'))
+      .finally(() => B(false));
+  }, [login, nav]);
+
+  const googleSignIn = () => {
+    window.location.href = `${API_BASE}/api/auth/google?redirect_to=${encodeURIComponent(`${window.location.origin}/login`)}`;
+  };
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     Xe('');
@@ -104,7 +132,7 @@ function Login() {
       if (!res.ok) throw new Error(data.detail || 'Authentication failed.');
       if (!data.access_token) throw new Error('The server did not return an access token.');
       const profileName = data.user?.full_name || name || email;
-      login(profileName, data.user?.email || email, data.access_token, data.role === 'admin' ? 'admin' : 'public');
+      login(profileName, data.user?.email || email, data.access_token, data.role === 'admin' ? 'admin' : 'public', data.refresh_token);
       nav('/home');
     } catch (err) {
       Xe(err instanceof Error ? err.message : 'Authentication failed. Please try again.');
@@ -150,6 +178,16 @@ function Login() {
               </button>
             ))}
           </div>
+          <button type="button" className="google-btn" onClick={googleSignIn} disabled={busy}>
+            <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
+              <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.2l7.9 6.2C12.5 13.6 17.8 9.5 24 9.5z"/>
+              <path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.7 6c4.5-4.2 6.9-10.3 6.9-17.7z"/>
+              <path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.2C1 16.6 0 20.2 0 24s1 7.4 2.7 10.8l7.9-6.2z"/>
+              <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.7-6c-2.2 1.5-5 2.3-8.2 2.3-6.2 0-11.5-4.1-13.4-9.9l-7.9 6.2C6.6 42.6 14.6 48 24 48z"/>
+            </svg>
+            Continue with Google
+          </button>
+          <div className="auth-divider"><span>or use email</span></div>
           <form onSubmit={submit}>
             {tab === 'signup' && (
               <label>

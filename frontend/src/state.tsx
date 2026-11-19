@@ -147,7 +147,7 @@ type AppState = {
   user: { name: string; email: string };
   authToken: string | null;
   loggedIn: boolean;
-  login: (name: string, email: string, token: string, role: 'public' | 'admin') => void;
+  login: (name: string, email: string, token: string, role: 'public' | 'admin', refreshToken?: string | null) => void;
   logout: () => void;
   segments: Segment[];
   setSegments: React.Dispatch<React.SetStateAction<Segment[]>>;
@@ -168,13 +168,13 @@ type AppState = {
 const Ctx = createContext<AppState | null>(null);
 
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
-  const [role, setRole] = useState<'public' | 'admin'>(() => window.sessionStorage.getItem('digiroad-role') === 'admin' ? 'admin' : 'public');
+  const [role, setRole] = useState<'public' | 'admin'>(() => window.localStorage.getItem('digiroad-role') === 'admin' ? 'admin' : 'public');
   const [user, setUser] = useState(() => {
-    try { return JSON.parse(window.sessionStorage.getItem('digiroad-user') || '{"name":"","email":""}'); }
+    try { return JSON.parse(window.localStorage.getItem('digiroad-user') || '{"name":"","email":""}'); }
     catch { return { name: '', email: '' }; }
   });
-  const [authToken, setAuthToken] = useState<string | null>(() => window.sessionStorage.getItem('digiroad-token'));
-  const [loggedIn, setLoggedIn] = useState(() => Boolean(window.sessionStorage.getItem('digiroad-token')));
+  const [authToken, setAuthToken] = useState<string | null>(() => window.localStorage.getItem('digiroad-token'));
+  const [loggedIn, setLoggedIn] = useState(() => Boolean(window.localStorage.getItem('digiroad-token')));
   const [segmentsList, setSegmentsList] = useState<Segment[]>(defaultSegments);
   const [complaints, setComplaints] = useState<Complaint[]>([]);
   const [recentRepairIds, setRecentRepairIds] = useState<string[]>([]);
@@ -261,6 +261,43 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       window.removeEventListener('focus', onFocus);
     };
   }, [authToken, loggedIn, refreshAll]);
+
+  // Keep users signed in across visits: swap the stored refresh token for a fresh access token
+  // on load and every 45 minutes (Supabase access tokens last 1 hour).
+  useEffect(() => {
+    if (!loggedIn) return;
+    const renew = async () => {
+      const refresh = window.localStorage.getItem('digiroad-refresh');
+      if (!refresh) return;
+      try {
+        const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: refresh }),
+        });
+        if (res.status === 401) {
+          // Refresh token revoked or expired: sign out cleanly.
+          ['digiroad-token', 'digiroad-role', 'digiroad-user', 'digiroad-refresh'].forEach(k => window.localStorage.removeItem(k));
+          setAuthToken(null);
+          setLoggedIn(false);
+          return;
+        }
+        if (!res.ok) return; // server waking up: keep current token, try again next tick
+        const data = await res.json();
+        const nextRole = data.role === 'admin' ? 'admin' : 'public';
+        setAuthToken(data.access_token);
+        setRole(nextRole);
+        window.localStorage.setItem('digiroad-token', data.access_token);
+        window.localStorage.setItem('digiroad-role', nextRole);
+        if (data.refresh_token) window.localStorage.setItem('digiroad-refresh', data.refresh_token);
+      } catch {
+        /* offline: try again next tick */
+      }
+    };
+    void renew();
+    const timer = window.setInterval(renew, 45 * 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, [loggedIn]);
 
   const NETWORK_MSG = 'Server not reachable (it may be waking up or redeploying). Wait 30 seconds and try again.';
 
@@ -475,22 +512,24 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       user,
       authToken,
       loggedIn,
-      login: (name, email, token, assignedRole) => {
+      login: (name, email, token, assignedRole, refreshToken) => {
+        if (refreshToken) window.localStorage.setItem('digiroad-refresh', refreshToken);
         setUser({ name, email });
         setAuthToken(token);
         setRole(assignedRole);
-        window.sessionStorage.setItem('digiroad-user', JSON.stringify({ name, email }));
-        window.sessionStorage.setItem('digiroad-role', assignedRole);
-        window.sessionStorage.setItem('digiroad-token', token);
+        window.localStorage.setItem('digiroad-user', JSON.stringify({ name, email }));
+        window.localStorage.setItem('digiroad-role', assignedRole);
+        window.localStorage.setItem('digiroad-token', token);
         setLoggedIn(true);
       },
       logout: () => {
         setLoggedIn(false);
         setAuthToken(null);
         setRole('public');
-        window.sessionStorage.removeItem('digiroad-token');
-        window.sessionStorage.removeItem('digiroad-role');
-        window.sessionStorage.removeItem('digiroad-user');
+        window.localStorage.removeItem('digiroad-token');
+        window.localStorage.removeItem('digiroad-role');
+        window.localStorage.removeItem('digiroad-user');
+        window.localStorage.removeItem('digiroad-refresh');
       },
       segments: segmentsList,
       setSegments: setSegmentsList,
