@@ -402,21 +402,39 @@ def _generate_reply(client: genai.Client, contents: List[types.Content], config:
     for name in [_working_model or "", os.getenv("GEMINI_MODEL", "")] + _discover_models(client):
         if name and name not in candidates:
             candidates.append(name)
-    candidates = candidates[:4]
+    candidates = candidates[:5]  # working model + up to 4 to race
     errors: List[str] = []
 
     def attempt(model_name: str) -> str:
         model_config = config.model_copy(update={"thinking_config": _thinking_for(model_name)})
         try:
-            response = client.models.generate_content(model=model_name, contents=contents, config=model_config)
+            try:
+                response = client.models.generate_content(model=model_name, contents=contents, config=model_config)
+            except Exception as e:
+                if "thinking" not in str(e).lower():
+                    raise
+                response = client.models.generate_content(model=model_name, contents=contents, config=config)
         except Exception as e:
-            if "thinking" not in str(e).lower():
-                raise
-            response = client.models.generate_content(model=model_name, contents=contents, config=config)
+            if "404" in str(e) and _discovered_models and model_name in _discovered_models:
+                _discovered_models.remove(model_name)  # retired model: stop trying it
+            raise
         text = (response.text or "").strip() if response else ""
         if not text:
             raise RuntimeError("empty reply")
         return text
+
+    def record_failure(name: str, e: Exception) -> None:
+        errors.append(f"{name}: {str(e)[:160]}")
+        logger.warning("PaveBot model %s failed: %s", name, e)
+
+    # Known-good model alone first: racing every request would burn the free quota 4x faster.
+    if _working_model:
+        name = candidates.pop(0)
+        try:
+            return attempt(name)
+        except Exception as e:
+            record_failure(name, e)
+            _working_model = None
 
     pool = ThreadPoolExecutor(max_workers=len(candidates) or 1)
     futures = {pool.submit(attempt, name): name for name in candidates}
@@ -426,14 +444,12 @@ def _generate_reply(client: genai.Client, contents: List[types.Content], config:
             try:
                 text = future.result()
             except Exception as e:
-                errors.append(f"{name}: {str(e)[:160]}")
-                logger.warning("PaveBot model %s failed: %s", name, e)
+                record_failure(name, e)
                 continue
             _working_model = name
             return text
     finally:
         pool.shutdown(wait=False, cancel_futures=True)  # don't wait for slower models
-    _working_model = None
     raise RuntimeError("; ".join(errors) or "No model returned a reply.")
 
 
