@@ -437,7 +437,7 @@ const HERO_SLIDES = [
 ];
 
 function Home() {
-  const { complaints, addComplaint, segments, recentRepairIds, refreshRepairBuckets } = useApp();
+  const { complaints, addComplaint, segments, recentRepairIds, refreshRepairBuckets, liveData } = useApp();
   const [selected, Sel] = useState<Segment | null>(null);
   const [query, Q] = useState('');
   const [modal, Modal] = useState(false);
@@ -448,6 +448,7 @@ function Home() {
 
   const [selectedComplaint, setSelectedComplaint] = useState<Complaint | null>(null);
 
+  const fresh = complaints.filter(c => c.status === 'nil');
   const under = complaints.filter(c => c.status === 'Under Progress');
   React.useEffect(() => { void refreshRepairBuckets(); }, [refreshRepairBuckets]);
   const done = complaints.filter(c => c.status === 'Repaired' && recentRepairIds.includes(c.id));
@@ -545,9 +546,13 @@ function Home() {
 
       <section className="ix-stats" data-reveal>
         <div><small>Segments monitored</small><b>{segments.length}</b></div>
-        <div><small>Average PCI</small><b>{avgPci}<i>/100</i></b></div>
-        <div><small>Open complaints</small><b>{under.length}</b></div>
-        <div><small>Needs attention</small><b>{worst ? worst.id : '—'}</b></div>
+        <div><small>Average PCI</small><b>{liveData ? avgPci : '…'}<i>/100</i></b>{!liveData && <span className="ix-stat-note">Loading live values</span>}</div>
+        <div>
+          <small>Complaints submitted</small>
+          <b>{complaints.length}</b>
+          <span className="ix-stat-note">{fresh.length} new · {under.length} in progress · {complaints.filter(c => c.status === 'Repaired').length} repaired</span>
+        </div>
+        <div><small>Needs attention</small><b>{liveData && worst ? worst.id : '…'}</b>{liveData && worst && <span className="ix-stat-note">PCI {worst.pci} · {worst.health}</span>}</div>
       </section>
 
       <section className="ix-dark ix-3d" id="corridor-3d">
@@ -664,11 +669,17 @@ function Home() {
             Submit a complaint <Plus size={15} />
           </button>
         </div>
-        <div className="tables">
+        <div className="tables tables-3">
+          <ComplaintTable
+            title="New reports"
+            entries={fresh}
+            empty="No new reports"
+            onSelectComplaint={setSelectedComplaint}
+          />
           <ComplaintTable
             title="Under progress"
             entries={under}
-            empty="No open complaints"
+            empty="No complaints in progress"
             onSelectComplaint={setSelectedComplaint}
           />
           <ComplaintTable
@@ -1365,7 +1376,7 @@ function RepairHistory() {
   const { complaints, segments, archivedRepairIds, refreshRepairBuckets } = useApp();
   const [selectedComplaint, setSelectedComplaint] = useState<Complaint | null>(null);
   const [filterSegment, setFilterSegment] = useState<string>('all');
-  const [viewTab, setViewTab] = useState<'archived' | 'all'>('archived');
+  const [viewTab, setViewTab] = useState<'archived' | 'all'>('all');
 
   const allRepaired = complaints.filter(c => c.status === 'Repaired');
   React.useEffect(() => { void refreshRepairBuckets(); }, [refreshRepairBuckets]);
@@ -1438,7 +1449,7 @@ function RepairHistory() {
               </div>
               <span>{segment?.name || c.segmentId}</span>
               <span className={`repaired-tag ${c.repairType === 'PATCHING' ? 'patching' : 'resurfacing'}`}>
-                <Check size={13} />{c.repairType === 'PATCHING' ? 'Patched' : 'Full resurfacing'}
+                <Check size={13} />{c.repairType === 'PATCHING' ? 'Patching' : 'Full repaired'}
               </span>
               <span>{c.repairedAt ? new Date(c.repairedAt).toLocaleString() : c.created}</span>
             </div>
@@ -1469,22 +1480,6 @@ function Admin() {
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [repairMenuId, setRepairMenuId] = useState<string | null>(null);
 
-  if (role !== 'admin') {
-    return (
-      <div className="auth-denied">
-        <div className="denied-icon">
-          <Shield size={27} />
-        </div>
-        <span className="kicker">Access restricted</span>
-        <h1>Not authorized</h1>
-        <p>This workspace area is available to municipal administrators.</p>
-        <button className="primary" onClick={() => nav('/home')}>
-          Return to Home <ChevronRight size={16} />
-        </button>
-      </div>
-    );
-  }
-
   const nilCount = complaints.filter(c => c.status === 'nil').length;
   const open = complaints.filter(c => c.status === 'Under Progress');
   const done = complaints.filter(c => c.status === 'Repaired');
@@ -1507,6 +1502,22 @@ function Admin() {
       crackingReduct: crackingReduct.toFixed(2),
     };
   }, [patchLength, patchWidth]);
+
+  if (role !== 'admin') {
+    return (
+      <div className="auth-denied">
+        <div className="denied-icon">
+          <Shield size={27} />
+        </div>
+        <span className="kicker">Access restricted</span>
+        <h1>Not authorized</h1>
+        <p>This workspace area is available to municipal administrators.</p>
+        <button className="primary" onClick={() => nav('/home')}>
+          Return to Home <ChevronRight size={16} />
+        </button>
+      </div>
+    );
+  }
 
   async function handlePatchSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -1608,19 +1619,19 @@ function Admin() {
                     <span className="status-pill nil">nil</span>
                     <button
                       className="btn-under-process"
-                      title="Update status to Under Process"
+                      title="Move this complaint to Under progress"
                       onClick={(e) => {
                         e.stopPropagation();
                         markUnderProcess(c.id);
                       }}
                     >
                       <Play size={11} fill="currentColor" />
-                      <span>Under Process</span>
+                      <span>Under progress</span>
                     </button>
                   </div>
                 ) : c.status === 'Under Progress' ? (
                   <div className="repair-status-cell">
-                    <span className="status-pill pending">Under Process</span>
+                    <span className="status-pill pending">Under progress</span>
                     <div className="repair-status-menu">
                       <button
                         className="btn-repair repaired-trigger"
@@ -1639,11 +1650,11 @@ function Admin() {
                             setPatchLength('25');
                             setPatchWidth('3.5');
                             setRepairMenuId(null);
-                          }}><Wrench size={13} />Patched</button>
+                          }}><Wrench size={13} />Patching</button>
                           <button onClick={() => {
                             setResurfaceModalComplaint(c);
                             setRepairMenuId(null);
-                          }}><RefreshCw size={13} />Full resurface</button>
+                          }}><RefreshCw size={13} />Full repaired</button>
                         </div>
                       )}
                     </div>
@@ -1651,7 +1662,7 @@ function Admin() {
                 ) : (
                   <span className={`repaired-tag ${c.repairType === 'PATCHING' ? 'patching' : 'resurfacing'}`}>
                     <Check size={13} />
-                    {c.repairType === 'PATCHING' ? 'Repaired (Patching)' : 'Repaired (Resurfaced)'}
+                    {c.repairType === 'PATCHING' ? 'Repaired · Patching' : 'Repaired · Full repaired'}
                   </span>
                 )}
               </div>
@@ -1847,7 +1858,7 @@ function ComplaintDetailModal({
             {c.status === 'nil' ? (
               <span className="status-pill nil">nil</span>
             ) : c.status === 'Under Progress' ? (
-              <span className="status-pill pending">Under Process</span>
+              <span className="status-pill pending">Under progress</span>
             ) : (
               <span className={`repaired-tag ${c.repairType === 'PATCHING' ? 'patching' : 'resurfacing'}`}>
                 <Check size={13} /> Repaired {c.repairType ? `(${c.repairType === 'PATCHING' ? 'Patching' : 'Resurfacing'})` : ''}
