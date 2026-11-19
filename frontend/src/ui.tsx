@@ -4,6 +4,8 @@ import {
   Activity,
   AlertTriangle,
   ArrowDownRight,
+  ArrowLeft,
+  ArrowRight,
   ArrowUpRight,
   Bot,
   CalendarDays,
@@ -41,6 +43,7 @@ import {
 } from 'recharts';
 import { MapContainer, TileLayer, Polyline, ZoomControl, useMap } from 'react-leaflet';
 import { API_BASE, Complaint, Health, Segment, useApp } from './state';
+import photoCredits from './photoCredits.json';
 
 const hc = (h: Health) => h.toLowerCase().replace(' ', '-');
 const color = (h: Health) =>
@@ -111,15 +114,18 @@ function Login() {
   }
 
   return (
-    <main className="login login-revealed">
-      <section className="login-visual" style={{ backgroundImage: `url(${PHOTOS.ghat})` }}>
-        <span className="era-logo">DigiRoad</span>
+    <main className="login login-revealed ix">
+      <section className="login-visual" style={{ backgroundImage: `url(${PHOTOS.wayanad})` }}>
+        <span className="ix-logo">
+          <span className="ix-logo-mark" aria-hidden="true" />
+          <span>DIGIROAD<small>Road health</small></span>
+        </span>
         <div className="login-visual-copy">
           <small className="caption">Thiruvananthapuram · Kerala</small>
           <h1>
-            Every road,
+            Every road
             <br />
-            <em>read closely</em>
+            measured
           </h1>
           <p>Pavement condition, decay forecasts and citizen repair reports for the MDR47 corridor, in one place.</p>
         </div>
@@ -195,13 +201,20 @@ function Login() {
   );
 }
 
-// Kerala road photography in public/img.
+// Kerala road photography in public/img (credits in photoCredits.json, shown in the footer).
 const PHOTOS = {
-  hill: '/img/hill-road.jpg',
-  night: '/img/night-flyover.jpg',
+  wayanad: '/img/wayanad-pass.jpg',
+  hairpin: '/img/attappadi-hairpin.jpg',
+  mdr: '/img/mdr-thrissur.jpg',
+  rural: '/img/rural-road.jpg',
+  forest: '/img/idukki-forest.jpg',
+  tvmStreet: '/img/tvm-street.jpg',
+  nh66: '/img/nh66-kochi.jpg',
+  sh59: '/img/sh59-elappara.jpg',
+  construction: '/img/kollam-construction.jpg',
+  traffic: '/img/tvm-mg-road.jpg',
   ghat: '/img/ghat-road.jpg',
   avenue: '/img/tree-avenue.jpg',
-  flood: '/img/flooded-road.jpg',
 };
 
 const NAV_LINKS: [string, string][] = [
@@ -211,6 +224,8 @@ const NAV_LINKS: [string, string][] = [
   ['/repaired', 'Repairs'],
   ['/admin', 'Admin'],
 ];
+
+const Corridor3D = React.lazy(() => import('./Corridor3D'));
 
 // Fades and lifts any [data-reveal] element into view once, as it scrolls in.
 function useReveal(deps: unknown[]) {
@@ -235,22 +250,25 @@ function useReveal(deps: unknown[]) {
   }, deps);
 }
 
+// 3D tilt toward the pointer; pair with the .tilt class.
+function tilt(e: React.MouseEvent<HTMLElement>) {
+  const el = e.currentTarget;
+  const r = el.getBoundingClientRect();
+  el.style.setProperty('--ry', `${((e.clientX - r.left) / r.width - 0.5) * 10}deg`);
+  el.style.setProperty('--rx', `${-((e.clientY - r.top) / r.height - 0.5) * 10}deg`);
+}
+function untilt(e: React.MouseEvent<HTMLElement>) {
+  e.currentTarget.style.setProperty('--rx', '0deg');
+  e.currentTarget.style.setProperty('--ry', '0deg');
+}
+
 function Shell() {
   const { role, user, logout, toast, segments } = useApp();
   const nav = useNavigate();
   const location = useLocation();
   const [menu, setMenu] = useState(false);
-  const onHome = location.pathname === '/home';
-  const [pastHero, setPastHero] = useState(false);
   useReveal([location.pathname, segments.length]);
   useEffect(() => setMenu(false), [location.pathname]);
-  useEffect(() => {
-    // Header turns solid once the dark hero has scrolled away, so its light text stays readable.
-    const onScroll = () => setPastHero(window.scrollY > window.innerHeight - 90);
-    onScroll();
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
-  }, [location.pathname]);
 
   const avgPci = useMemo(() => {
     if (!segments.length) return 0;
@@ -264,34 +282,41 @@ function Shell() {
   };
 
   return (
-    <div className={`shell ${onHome ? 'on-hero' : ''} ${onHome && pastHero ? 'past-hero' : ''} ${menu ? 'menu-open' : ''}`}>
-      <header className="era-head">
-        <NavLink to="/home" className="era-logo">DigiRoad</NavLink>
-        <nav className="era-links" aria-label="Primary">
+    <div className={`shell ix ${menu ? 'menu-open' : ''}`}>
+      <div className="ix-utility">
+        <span className="ix-tag"><RouteIcon size={14} /> Kerala PWD · MDR47 corridor</span>
+        <div>
+          <span>Thiruvananthapuram, Kerala</span>
+          <span>{user.name} · {role === 'admin' ? 'Admin' : 'Public'}</span>
+          <button onClick={signOut}>Log out</button>
+        </div>
+      </div>
+      <header className="ix-head">
+        <NavLink to="/home" className="ix-logo">
+          <span className="ix-logo-mark" aria-hidden="true" />
+          <span>DIGIROAD<small>Road health</small></span>
+        </NavLink>
+        <nav className="ix-links" aria-label="Primary">
           {NAV_LINKS.map(([to, label]) => (
             <NavLink key={to} to={to}>{label}</NavLink>
           ))}
         </nav>
-        <div className="era-actions">
-          <span className="era-user">{user.name} · {role === 'admin' ? 'Admin' : 'Public'}</span>
-          <button className="era-pill" onClick={signOut}>Log out</button>
-          <button className="era-menu-btn" onClick={() => setMenu(m => !m)} aria-expanded={menu}>
-            {menu ? 'Close' : 'Menu'}
+        <div className="ix-actions">
+          <NavLink to="/trends" className="ix-btn outline">Condition reports</NavLink>
+          <button className="ix-menu-btn" onClick={() => setMenu(m => !m)} aria-expanded={menu} aria-label="Menu">
+            {menu ? <X size={20} /> : <Menu size={20} />}
           </button>
         </div>
       </header>
-      <div className="era-menu" aria-hidden={!menu}>
+      <div className="ix-menu" aria-hidden={!menu}>
         <nav>
-          {NAV_LINKS.map(([to, label], i) => (
-            <NavLink key={to} to={to}>
-              <small>{String(i + 1).padStart(2, '0')}</small>
-              {label}
-            </NavLink>
+          {NAV_LINKS.map(([to, label]) => (
+            <NavLink key={to} to={to}>{label}<ChevronRight size={22} /></NavLink>
           ))}
         </nav>
-        <div className="era-menu-foot">
+        <div className="ix-menu-foot">
           <span>{user.name} · {role === 'admin' ? 'Admin' : 'Public'}</span>
-          <button onClick={signOut}>Log out</button>
+          <button className="ix-btn outline" onClick={signOut}>Log out</button>
         </div>
       </div>
       <main className="main">
@@ -304,34 +329,47 @@ function Shell() {
             <Route path="/admin" element={<Admin />} />
           </Routes>
         </div>
-        <footer className="era-foot">
-          <div className="era-foot-top">
-            <span className="era-foot-mark">DigiRoad</span>
-            <button className="era-pill light" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
-              Back to top
-            </button>
-          </div>
-          <div className="era-foot-grid">
+        <footer className="ix-foot">
+          <div className="ix-foot-grid">
             <div>
-              <small className="caption">Corridor</small>
-              <b>Vembayam – Pallipuram Road (MDR47)</b>
+              <span className="ix-logo">
+                <span className="ix-logo-mark" aria-hidden="true" />
+                <span>DIGIROAD<small>Road health</small></span>
+              </span>
+              <p>Pavement condition, decay forecasts and citizen repair reports for Kerala's roads, starting with the MDR47 corridor.</p>
+            </div>
+            <div>
+              <h4>Corridor</h4>
+              <span>Vembayam – Pallipuram Road (MDR47)</span>
               <span>Thiruvananthapuram, Kerala</span>
+              <span>Network PCI {avgPci} / 100 · {segments.length} segments</span>
             </div>
             <div>
-              <small className="caption">Network index</small>
-              <b>PCI {avgPci} / 100</b>
-              <span>{segments.length} monitored segments</span>
-            </div>
-            <div>
-              <small className="caption">Workspace</small>
+              <h4>Workspace</h4>
               {NAV_LINKS.map(([to, label]) => (
                 <NavLink key={to} to={to}>{label}</NavLink>
               ))}
             </div>
+            <div>
+              <h4>Back to top</h4>
+              <button className="ix-btn outline" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+                Top <ArrowUpRight size={16} />
+              </button>
+            </div>
           </div>
-          <div className="era-foot-base">
+          <details className="ix-credits">
+            <summary>Photo credits</summary>
+            <ul>
+              {photoCredits.map(c => (
+                <li key={c.file}>
+                  <a href={c.source} target="_blank" rel="noreferrer">{c.title}</a> · {c.author || 'Wikimedia Commons'} · {c.license}
+                </li>
+              ))}
+            </ul>
+          </details>
+          <div className="ix-foot-base">
             <span>© {new Date().getFullYear()} DigiRoad · MDR47 road health workspace</span>
-            <span>Map data © OpenStreetMap contributors</span>
+            <span>Map data © OpenStreetMap contributors · Photos via Wikimedia Commons</span>
           </div>
         </footer>
       </main>
@@ -377,13 +415,36 @@ function HealthTag({ h }: { h: Health }) {
   );
 }
 
+const HERO_SLIDES = [
+  {
+    img: PHOTOS.wayanad,
+    title: ['Every kilometre', 'measured'],
+    text: 'Live Pavement Condition Index scores for every segment of the MDR47 corridor, updated from field data, weather and traffic.',
+    cta: ['Open the 3D corridor', '#corridor-3d'],
+  },
+  {
+    img: PHOTOS.hairpin,
+    title: ['From hairpin', 'to highway'],
+    text: "Kerala's roads face monsoon rain, steep ghats and heavy traffic. DigiRoad forecasts how each surface will age before it fails.",
+    cta: ['Run a decay simulation', '/simulations'],
+  },
+  {
+    img: PHOTOS.tvmStreet,
+    title: ['Built for', 'Thiruvananthapuram'],
+    text: 'Residents report potholes and drainage problems. Engineers follow every complaint from first report to finished repair.',
+    cta: ['See the condition map', '#corridor-map'],
+  },
+];
+
 function Home() {
   const { complaints, addComplaint, segments, recentRepairIds, refreshRepairBuckets } = useApp();
   const [selected, Sel] = useState<Segment | null>(null);
   const [query, Q] = useState('');
   const [modal, Modal] = useState(false);
   const [bot, BotOpen] = useState(false);
-  const [night, setNight] = useState(false);
+  const [slide, setSlide] = useState(0);
+  const rail = React.useRef<HTMLDivElement>(null);
+  const navTo = useNavigate();
 
   const [selectedComplaint, setSelectedComplaint] = useState<Complaint | null>(null);
 
@@ -394,123 +455,158 @@ function Home() {
     s => s.name.toLowerCase().includes(query.toLowerCase()) || s.id.toLowerCase().includes(query.toLowerCase())
   );
 
+  useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const t = window.setInterval(() => setSlide(i => (i + 1) % HERO_SLIDES.length), 7000);
+    return () => window.clearInterval(t);
+  }, [slide]);
+
   const avgPci = useMemo(() => {
     if (!segments.length) return '0.0';
     return (segments.reduce((acc, s) => acc + s.pci, 0) / segments.length).toFixed(1);
   }, [segments]);
 
   const worst = [...segments].sort((a, b) => a.pci - b.pci)[0];
+  const segPhotos = [PHOTOS.rural, PHOTOS.forest, PHOTOS.sh59, PHOTOS.nh66, PHOTOS.ghat];
+  const go = (href: string) => (href.startsWith('#') ? document.querySelector(href)?.scrollIntoView({ behavior: 'smooth' }) : navTo(href));
+  const scrollRail = (dir: number) => rail.current?.scrollBy({ left: dir * rail.current.clientWidth * 0.8, behavior: 'smooth' });
+
   const services = [
     {
-      img: PHOTOS.ghat,
+      img: PHOTOS.mdr,
       title: 'Condition monitoring',
-      text: 'Every segment is scored on the Pavement Condition Index from cracking, raveling, rutting, patching and roughness, then mapped in colour.',
-      action: <a href="#corridor-map">View the live map</a>,
+      text: 'Each segment is scored on the Pavement Condition Index from cracking, raveling, rutting, patching and roughness, then mapped in colour.',
+      label: 'View the live map',
+      href: '#corridor-map',
     },
     {
       img: PHOTOS.avenue,
       title: 'Decay simulation',
       text: 'Weather and traffic drive a deterioration model that forecasts how each road will age, so repairs land before the surface fails.',
-      action: <NavLink to="/simulations">Run a simulation</NavLink>,
+      label: 'Run a simulation',
+      href: '/simulations',
     },
     {
-      img: PHOTOS.flood,
+      img: PHOTOS.traffic,
       title: 'Citizen repair loop',
       text: 'Residents report potholes, drainage and surface damage. Engineers track each complaint from report to repair, in the open.',
-      action: <button onClick={() => Modal(true)}>Report an issue</button>,
+      label: 'Report an issue',
+      href: 'report',
     },
   ];
 
   return (
     <>
-      <section className={`era-hero ${night ? 'is-night' : ''}`}>
-        <div className="era-hero-img day" style={{ backgroundImage: `url(${PHOTOS.hill})` }} />
-        <div className="era-hero-img night" style={{ backgroundImage: `url(${PHOTOS.night})` }} />
-        <div className="era-hero-shade" />
-        <div className="era-hero-copy">
-          <small className="caption">Vembayam – Pallipuram Road · Kerala</small>
-          <h1>
-            Every road,
-            <br />
-            <em>read closely</em>
-          </h1>
-        </div>
-        <div className="era-hero-foot">
-          <div className="era-toggle" role="group" aria-label="Hero photo">
-            <button className={!night ? 'on' : ''} onClick={() => setNight(false)}>By day</button>
-            <button className={night ? 'on' : ''} onClick={() => setNight(true)}>By night</button>
+      <section className="ix-hero" aria-roledescription="carousel">
+        {HERO_SLIDES.map((s, i) => (
+          <div key={s.img} className={`ix-slide ${i === slide ? 'on' : ''}`} aria-hidden={i !== slide}>
+            <div className="ix-slide-img" style={{ backgroundImage: `url(${s.img})` }} />
+            <div className="ix-slide-copy">
+              <h1>{s.title[0]}<br />{s.title[1]}</h1>
+              <p>{s.text}</p>
+              <button className="ix-btn light" tabIndex={i === slide ? 0 : -1} onClick={() => go(s.cta[1])}>
+                {s.cta[0]}
+              </button>
+            </div>
           </div>
-          <a href="#corridor-intro" className="era-scroll">Scroll</a>
-          <span className="era-count">{night ? 2 : 1} / 2</span>
-        </div>
-      </section>
-
-      <section className="era-intro" id="corridor-intro">
-        <div className="era-intro-head" data-reveal>
-          <small className="caption">The corridor</small>
-          <h2>
-            Three kilometres of road,
-            <br />
-            <em>measured every day</em>
-          </h2>
-          <p>
-            DigiRoad watches the MDR47 corridor in Thiruvananthapuram segment by segment. It combines live condition
-            scores, weather-driven decay forecasts and citizen reports so road teams know where to act first.
-          </p>
-          <button className="era-pill" onClick={() => Modal(true)}>
-            <Plus size={15} /> Report an issue
+        ))}
+        <div className="ix-hero-arrows">
+          <button aria-label="Previous slide" onClick={() => setSlide(i => (i + HERO_SLIDES.length - 1) % HERO_SLIDES.length)}>
+            <ArrowLeft size={20} />
+          </button>
+          <button aria-label="Next slide" onClick={() => setSlide(i => (i + 1) % HERO_SLIDES.length)}>
+            <ArrowRight size={20} />
           </button>
         </div>
-        <div className="era-stats" data-reveal>
-          <div>
-            <small>Segments monitored</small>
-            <b>{segments.length}</b>
-          </div>
-          <div>
-            <small>Average PCI</small>
-            <b>{avgPci}<i>/100</i></b>
-          </div>
-          <div>
-            <small>Open complaints</small>
-            <b>{under.length}</b>
-          </div>
-          <div>
-            <small>Needs attention</small>
-            <b className="era-stat-text">{worst ? worst.id : '—'}</b>
-          </div>
-        </div>
-      </section>
-
-      <section className="era-services">
-        <div className="era-section-head" data-reveal>
-          <small className="caption">What we do</small>
-          <h2>
-            Three ways we keep
-            <br />
-            <em>the road honest</em>
-          </h2>
-        </div>
-        <div className="era-service-list">
-          {services.map((s, i) => (
-            <article className="era-service" key={s.title} data-reveal>
-              <div className="era-service-img" style={{ backgroundImage: `url(${s.img})` }} />
-              <div className="era-service-body">
-                <span className="era-num">{String(i + 1).padStart(2, '0')}</span>
-                <h3>{s.title}</h3>
-                <p>{s.text}</p>
-                <span className="era-link">{s.action}</span>
-              </div>
-            </article>
+        <div className="ix-hero-dots">
+          {HERO_SLIDES.map((s, i) => (
+            <button key={s.img} className={i === slide ? 'on' : ''} aria-label={`Slide ${i + 1}`} onClick={() => setSlide(i)} />
           ))}
         </div>
       </section>
 
-      <section className="map-section" id="corridor-map" data-reveal>
-        <div className="section-head">
-          <div>
-            <div className="kicker">Spatial condition model</div>
-            <h2>The corridor, <em>segment by segment</em></h2>
+      <section className="ix-intro">
+        <h2 className="ix-dash" data-reveal>When roads fail, Kerala should know first</h2>
+        <div data-reveal>
+          <p>
+            DigiRoad watches the Vembayam – Pallipuram Road in Thiruvananthapuram segment by segment. It combines live
+            condition scores, weather-driven decay forecasts and citizen reports so road teams know where to act first.
+          </p>
+          <p>
+            Every number on this page comes from the live database: pavement distress readings, the decay model and the
+            complaints residents file.
+          </p>
+          <div className="ix-intro-actions">
+            <button className="ix-btn" onClick={() => go('#corridor-3d')}>Open the 3D corridor <ArrowRight size={16} /></button>
+            <button className="ix-btn" onClick={() => Modal(true)}>Report an issue <ArrowRight size={16} /></button>
           </div>
+        </div>
+      </section>
+
+      <section className="ix-stats" data-reveal>
+        <div><small>Segments monitored</small><b>{segments.length}</b></div>
+        <div><small>Average PCI</small><b>{avgPci}<i>/100</i></b></div>
+        <div><small>Open complaints</small><b>{under.length}</b></div>
+        <div><small>Needs attention</small><b>{worst ? worst.id : '—'}</b></div>
+      </section>
+
+      <section className="ix-dark ix-3d" id="corridor-3d">
+        <div className="ix-3d-head" data-reveal>
+          <h2 className="ix-dash light">The corridor in 3D</h2>
+          <p>
+            The real shape of MDR47, raised from the map. Road colour shows condition and each pillar's height is its PCI.
+            Drag to turn the model, click a road or pillar to open that segment.
+          </p>
+          <div className="ix-3d-legend">
+            {(['Very Poor', 'Poor', 'Fair', 'Good'] as Health[]).map(h => (
+              <span key={h}><i className={`dot ${hc(h)}`} />{h}</span>
+            ))}
+          </div>
+        </div>
+        <React.Suspense fallback={<div className="corridor-3d loading">Loading 3D model…</div>}>
+          <Corridor3D segments={segments} onPick={Sel} />
+        </React.Suspense>
+      </section>
+
+      <section className="ix-rail-section">
+        <div className="ix-rail-head" data-reveal>
+          <h2>Monitored segments</h2>
+          <div className="ix-rail-nav">
+            <span>Open a segment</span>
+            <button aria-label="Scroll left" onClick={() => scrollRail(-1)}><ArrowLeft size={18} /></button>
+            <button aria-label="Scroll right" onClick={() => scrollRail(1)}><ArrowRight size={18} /></button>
+          </div>
+        </div>
+        <div className="ix-rail" ref={rail}>
+          {segments.map((s, i) => (
+            <button key={s.id} className="ix-card tilt" onClick={() => Sel(s)} onMouseMove={tilt} onMouseLeave={untilt}>
+              <span className="ix-card-img" style={{ backgroundImage: `url(${segPhotos[i % segPhotos.length]})` }}>
+                <HealthTag h={s.health} />
+              </span>
+              <span className="ix-card-title">Segment {s.id.split('-').pop()} · {s.name.replace(/\s*\(.*\)\s*$/, '')}</span>
+              <span className="ix-card-meta">PCI {s.pci} · IRI {s.iri} m/km · Cracking {s.cracking}% · Rutting {s.rutting} mm</span>
+              <span className="ix-card-code">{s.id}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="ix-split ix-dark">
+        <div className="ix-split-img" style={{ backgroundImage: `url(${PHOTOS.construction})` }} />
+        <div className="ix-split-copy" data-reveal>
+          <h2 className="ix-dash light">Repairs planned from evidence, not guesswork</h2>
+          <p>
+            Patching or full resurfacing, the decision follows the data. DigiRoad records each repair against the segment
+            and recomputes its condition, so the next budget starts from what actually happened on the road.
+          </p>
+          <p>Open complaints, repairs under way and finished work all sit in one tracker that residents can follow.</p>
+          <NavLink to="/repaired" className="ix-btn outline">See repair history</NavLink>
+        </div>
+      </section>
+
+      <section className="map-section ix-map" id="corridor-map" data-reveal>
+        <div className="section-head">
+          <h2 className="ix-dash">Live condition map</h2>
           <div className="searchbox">
             <Search size={15} />
             <input id="road-search" placeholder="Search segments" value={query} onChange={e => Q(e.target.value)} />
@@ -531,7 +627,6 @@ function Home() {
                 {!results.length && <small>No matching road segments</small>}
               </div>
             )}
-            <kbd>⌘ K</kbd>
           </div>
         </div>
         <div className="map-wrap">
@@ -552,33 +647,21 @@ function Home() {
         </div>
       </section>
 
-      <section className="era-segments era-segments-stack">
-        <div className="era-section-head" data-reveal>
-          <small className="caption">Monitored segments</small>
-          <h2>
-            Choose a segment,
-            <br />
-            <em>see its condition</em>
-          </h2>
-          <p>
-            The deck turns on its own. Hover or tap it to fan the segments out, then pick one to open its PCI, roughness
-            and distress readings.
-          </p>
-        </div>
-        <div data-reveal>
-          <CardStack segments={segments} onPick={Sel} />
-        </div>
+      <section className="ix-services">
+        {services.map(s => (
+          <article key={s.title} className="ix-service tilt" onMouseMove={tilt} onMouseLeave={untilt} data-reveal>
+            <div className="ix-service-img" style={{ backgroundImage: `url(${s.img})` }} />
+            <h3>{s.title}</h3>
+            <p>{s.text}</p>
+            <button className="ix-btn" onClick={() => (s.href === 'report' ? Modal(true) : go(s.href))}>{s.label}</button>
+          </article>
+        ))}
       </section>
 
-      <section className="complaints" data-reveal>
+      <section className="complaints ix-complaints" data-reveal>
         <div className="section-title">
-          <div>
-            <div className="kicker">Citizen feedback</div>
-            <h2>
-              Complaints tracker <small>{complaints.length}</small>
-            </h2>
-          </div>
-          <button className="link-button" onClick={() => Modal(true)}>
+          <h2 className="ix-dash">Complaints tracker <small>{complaints.length}</small></h2>
+          <button className="ix-btn" onClick={() => Modal(true)}>
             Submit a complaint <Plus size={15} />
           </button>
         </div>
@@ -598,17 +681,13 @@ function Home() {
         </div>
       </section>
 
-      <section className="era-cta" style={{ backgroundImage: `url(${PHOTOS.hill})` }}>
-        <div className="era-cta-inner" data-reveal>
-          <small className="caption">Seen something on the road?</small>
-          <h2>
-            Tell us where it hurts
-            <br />
-            <em>We'll track the repair</em>
-          </h2>
-          <div className="era-cta-actions">
-            <button className="era-pill light" onClick={() => Modal(true)}>Report an issue</button>
-            <button className="era-pill ghost" onClick={() => BotOpen(true)}>Ask PaveBot</button>
+      <section className="ix-cta" style={{ backgroundImage: `url(${PHOTOS.sh59})` }}>
+        <div className="ix-cta-inner" data-reveal>
+          <h2>Seen a pothole on MDR47?</h2>
+          <p>Report it in under a minute. You can follow it until the repair is done.</p>
+          <div className="ix-cta-actions">
+            <button className="ix-btn light" onClick={() => Modal(true)}>Report an issue</button>
+            <button className="ix-btn outline light" onClick={() => BotOpen(true)}>Ask PaveBot</button>
           </div>
         </div>
       </section>
@@ -623,76 +702,6 @@ function Home() {
   );
 }
 
-// Card-stack reveal: a 3D deck that fans out into a list on hover, focus or tap.
-const STACK_PHOTOS = [PHOTOS.ghat, PHOTOS.avenue, PHOTOS.flood, PHOTOS.hill, PHOTOS.night];
-const CARD_H = 112; // px, card height
-const PEEK = 30; // px of each back card left visible when stacked
-const GAP = 14; // px between cards when fanned out
-
-function CardStack({ segments, onPick }: { segments: Segment[]; onPick: (s: Segment) => void }) {
-  const [open, setOpen] = useState(false);
-  const count = segments.length;
-
-  if (!count) return null;
-  const height = open ? count * CARD_H + (count - 1) * GAP : (count - 1) * PEEK + CARD_H;
-
-  return (
-    <div
-      className={`card-stack ${open ? 'open' : ''}`}
-      style={{ height }}
-      tabIndex={0}
-      role="group"
-      aria-label={open ? 'Segment list' : 'Segment deck, press Enter to expand'}
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-      onFocus={() => setOpen(true)}
-      onBlur={e => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node)) setOpen(false);
-      }}
-      onClick={() => setOpen(true)}
-    >
-      {segments.map((s, i) => {
-        // Slot 0 is the back of the deck, count-1 the front.
-        const slot = i;
-        const depth = count - 1 - slot;
-        const y = open ? slot * (CARD_H + GAP) : slot * PEEK;
-        return (
-          <button
-            key={s.id}
-            className="stack-card"
-            tabIndex={open ? 0 : -1}
-            onClick={e => {
-              e.stopPropagation();
-              if (open) onPick(s);
-              else setOpen(true);
-            }}
-            style={{
-              zIndex: slot + 1,
-              transform: open
-                ? `translateY(${y}px)`
-                : `translateY(${y}px) translateZ(${-depth * 60}px) scale(${1 - depth * 0.05})`,
-              opacity: open ? 1 : Math.max(0.4, 1 - depth * 0.22),
-              transitionDelay: open ? `${slot * 50}ms` : '0ms',
-            }}
-          >
-            <img src={STACK_PHOTOS[i % STACK_PHOTOS.length]} alt="" />
-            <span className="stack-card-text">
-              <small>{s.name.replace(/\s*\(.*\)\s*$/, '')}</small>
-              <b>Segment {s.id.split('-').pop()}</b>
-              <span>
-                PCI {s.pci} · IRI {s.iri} m/km · Cracking {s.cracking}%
-              </span>
-            </span>
-            <span className="stack-card-end">
-              <HealthTag h={s.health} />
-              <ChevronRight size={16} />
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 function MapLines({
   selected,
