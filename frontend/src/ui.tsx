@@ -43,7 +43,8 @@ import {
 } from 'recharts';
 import { CircleMarker, MapContainer, TileLayer, Polyline, ZoomControl, useMap, useMapEvents } from 'react-leaflet';
 import { API_BASE, Complaint, ComplaintForm, Health, Segment, classifyHealth, useApp } from './state';
-import { LangToggle, PrivacyNotice, T as TXT, TrackComplaint, metersBetween, nearestSegment, roadInPlainWords, scoreRoute, shrinkPhoto } from './citizen';
+import { LangToggle, PrivacyNotice, T as TXT, TrackComplaint, ASSUMED_PCI, assumedPci, inPlannerArea, metersBetween, nearestSegment, rankRoutes, roadInPlainWords, shrinkPhoto } from './citizen';
+import type { PlannedRoute, RouteCandidate } from './citizen';
 import photoCredits from './photoCredits.json';
 
 // No @types/leaflet in this project, so react-leaflet props are cast (same as LeafletMap below).
@@ -182,6 +183,7 @@ const NAV_LINKS: [string, string][] = [
 ];
 
 const Corridor3D = React.lazy(() => import('./Corridor3D'));
+const Map3D = React.lazy(() => import('./Map3D'));
 
 // Fades and lifts any [data-reveal] element into view once, as it scrolls in.
 function useReveal(deps: unknown[]) {
@@ -600,7 +602,14 @@ function Home() {
           </div>
         </div>
         <div className="map-wrap">
-          <LeafletMap selected={selected} onSelect={Sel} segments={segments} />
+          <React.Suspense fallback={<div className="map3d loading">Loading 3D map…</div>}>
+            <Map3D
+              selected={selected}
+              onSelect={Sel}
+              segments={segments}
+              fallback={<LeafletMap selected={selected} onSelect={Sel} segments={segments} />}
+            />
+          </React.Suspense>
           <div className="map-location">
             <MapPin size={14} /> Pothencode <small>8.62° N · 76.91° E</small>
           </div>
@@ -1072,57 +1081,78 @@ function MapClicks({ onClick }: { onClick: (lat: number, lng: number) => void })
   return null;
 }
 
-type PlannedRoute = { path: [number, number][]; km: number; minutes: number; pci: number | null; surveyedPct: number };
+type OsrmStep = { name?: string; ref?: string; geometry: { coordinates: [number, number][] } };
+type OsrmRoute = { distance: number; duration: number; legs: { steps: OsrmStep[] }[] };
 
-// Smoothest route: OSRM gives up to 3 alternatives, ranked here by the PCI of surveyed segments they use.
+// One colour per route, so the map lines match the list.
+const ROUTE_COLORS = ['#0073cf', '#9333ea', '#ea580c', '#0d9488', '#db2777', '#4d7c0f', '#b45309', '#475569'];
+
+// Route planner: collect every distinct route A to B, score each over its whole length (measured PCI on
+// surveyed segments, assumed PCI by road class elsewhere) and show them all, highest PCI first.
+// OSRM often returns only one route, so extra candidates go through each surveyed segment and through points
+// either side of the straight line.
 // shortcut: public OSRM demo server (light use only, no SLA); self-host OSRM or use a paid router before heavy traffic.
 function RoutePlanner() {
   const { segments } = useApp();
   const [a, setA] = useState<[number, number] | null>(null);
   const [b, setB] = useState<[number, number] | null>(null);
   const [routes, setRoutes] = useState<PlannedRoute[]>([]);
+  const [chosen, setChosen] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
+  async function osrm(points: [number, number][], alternatives: boolean): Promise<RouteCandidate[]> {
+    const where = points.map(([lat, lng]) => `${lng},${lat}`).join(';');
+    const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${where}?alternatives=${alternatives}&steps=true&overview=false&geometries=geojson`);
+    const body = await res.json();
+    if (!res.ok || body.code !== 'Ok') throw new Error(body.message || `Routing failed (${res.status})`);
+    return body.routes.map((r: OsrmRoute) => {
+      const parts = r.legs.flatMap(leg => leg.steps).map(st => ({
+        path: st.geometry.coordinates.map(([lon, lat]) => [lat, lon] as [number, number]),
+        road: st.ref || st.name || '',
+        assumed: assumedPci(st.ref || '', st.name || ''),
+      }));
+      return { path: parts.flatMap(pt => pt.path), parts, km: r.distance / 1000, minutes: Math.round(r.duration / 60) };
+    });
+  }
+
   async function plan(from: [number, number], to: [number, number]) {
-    setBusy(true); setError(''); setRoutes([]);
-    try {
-      const url = `https://router.project-osrm.org/route/v1/driving/${from[1]},${from[0]};${to[1]},${to[0]}?alternatives=3&overview=full&geometries=geojson`;
-      const res = await fetch(url);
-      const body = await res.json();
-      if (!res.ok || body.code !== 'Ok') throw new Error(body.message || `Routing failed (${res.status})`);
-      const found: PlannedRoute[] = body.routes.map((r: { geometry: { coordinates: [number, number][] }; distance: number; duration: number }) => {
-        const path = r.geometry.coordinates.map(([lon, lat]) => [lat, lon] as [number, number]);
-        return { path, km: r.distance / 1000, minutes: Math.round(r.duration / 60), ...scoreRoute(path, segments) };
-      });
-      // Best known surface first; routes on no surveyed road go last, shortest first.
-      found.sort((x, y) => (y.pci ?? -1) - (x.pci ?? -1) || x.km - y.km);
-      setRoutes(found);
-    } catch (err) {
-      setError(err instanceof TypeError ? 'Routing service not reachable. Check your connection and try again.' : err instanceof Error ? err.message : 'Routing failed.');
-    } finally {
-      setBusy(false);
+    setBusy(true); setError(''); setRoutes([]); setChosen(0);
+    const mid: [number, number] = [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2];
+    const perp: [number, number] = [-(to[1] - from[1]), to[0] - from[0]];
+    const vias: [number, number][] = [
+      ...segments.filter(s => s.coords.length).map(s => s.coords[Math.floor(s.coords.length / 2)]),
+      ...[0.2, -0.2, 0.45, -0.45].map(k => [mid[0] + perp[0] * k, mid[1] + perp[1] * k] as [number, number]),
+    ];
+    const results = await Promise.allSettled([osrm([from, to], true), ...vias.map(v => osrm([from, v, to], false))]);
+    const found = results.flatMap(r => (r.status === 'fulfilled' ? r.value : []));
+    if (found.length) {
+      setRoutes(rankRoutes(found, segments));
+    } else {
+      const fail = results.find(r => r.status === 'rejected') as PromiseRejectedResult | undefined;
+      setError(fail?.reason instanceof TypeError ? 'Routing service not reachable. Check your connection and try again.' : fail?.reason?.message || 'No route found.');
     }
+    setBusy(false);
   }
 
   function reset() {
-    setA(null); setB(null); setRoutes([]); setError('');
+    setA(null); setB(null); setRoutes([]); setError(''); setChosen(0);
   }
 
   function pick(lat: number, lng: number) {
+    if (!inPlannerArea([lat, lng])) { setError('Pick a point inside Thiruvananthapuram district. Road condition is only estimated there.'); return; }
     if (!a || b) { reset(); setA([lat, lng]); return; }
     if (metersBetween(a, [lat, lng]) < 20) return; // second tap on the start point
     setB([lat, lng]);
     void plan(a, [lat, lng]);
   }
 
-  const best = routes[0];
   return (
     <>
       <Heading
-        eyebrow="Route planner · surveyed road condition"
-        title="Find the smoothest route"
-        description="Tap the map to set the start (A), then the destination (B). Routes are ranked by the condition of the DigiRoad segments they use."
+        eyebrow="Route planner · road condition"
+        title="Compare routes by road condition"
+        description="Tap the map to set the start (A), then the destination (B). Every route found is shown with its PCI score; the highest is the smoothest."
       />
       <div className="route-layout">
         <div className="map-wrap route-map">
@@ -1131,13 +1161,15 @@ function RoutePlanner() {
             {segments.map(s => (
               <Polyline key={s.id} positions={s.coords} pathOptions={{ color: color(s.health), weight: 4, opacity: 0.6 }} />
             ))}
-            {/* Alternatives first so the best route draws on top. */}
-            {routes.map((r, i) => i > 0 && (
-              <Polyline key={i} positions={r.path} pathOptions={{ color: '#6b7680', weight: 5, opacity: 0.7, dashArray: '6 8' }} />
+            {/* Chosen route drawn last so it sits on top. */}
+            {routes.map((r, i) => ({ r, i })).sort((x, y) => Number(x.i === chosen) - Number(y.i === chosen)).map(({ r, i }) => (
+              <Polyline
+                key={i}
+                positions={r.path}
+                pathOptions={{ color: ROUTE_COLORS[i % ROUTE_COLORS.length], weight: i === chosen ? 8 : 5, opacity: i === chosen ? 1 : 0.55 }}
+                eventHandlers={{ click: () => setChosen(i) }}
+              />
             ))}
-            {best && (
-              <Polyline positions={best.path} pathOptions={{ color: best.pci === null ? '#0073cf' : color(classifyHealth(best.pci)), weight: 7 }} />
-            )}
             {a && <CircleMarker {...dotAt(a, '#16A34A')} />}
             {b && <CircleMarker {...dotAt(b, '#DC2626')} />}
             <MapClicks onClick={pick} />
@@ -1146,22 +1178,32 @@ function RoutePlanner() {
         <div className="route-list" aria-live="polite">
           {!a && <p>Tap the map to set the start point (A).</p>}
           {a && !b && <p>Now tap the destination (B).</p>}
-          {busy && <p>Finding routes…</p>}
+          {busy && <p>Finding all routes…</p>}
           {error && <div className="error" role="alert">{error}</div>}
+          {routes.length > 0 && (
+            <p>{routes.length === 1 ? 'Only one route exists between these points.' : `${routes.length} routes found, highest PCI first.`}</p>
+          )}
           {routes.map((r, i) => (
-            <div key={i} className={`route-card ${i === 0 ? 'best' : ''}`}>
-              <b>{i === 0 ? 'Smoothest route' : `Alternative ${i}`}</b>
-              <span>{r.km.toFixed(1)} km · about {r.minutes} min</span>
-              {r.pci === null ? (
-                <span>Uses no surveyed road. Condition unknown.</span>
-              ) : (
-                <span>Surveyed road PCI {r.pci} ({classifyHealth(r.pci)}) · {r.surveyedPct}% of the route surveyed</span>
-              )}
-            </div>
+            <button
+              key={i}
+              type="button"
+              className={`route-card ${i === chosen ? 'chosen' : ''}`}
+              style={{ borderLeftColor: ROUTE_COLORS[i % ROUTE_COLORS.length] }}
+              onClick={() => setChosen(i)}
+              aria-pressed={i === chosen}
+            >
+              <b>{i === 0 ? 'Route 1 · smoothest' : `Route ${i + 1}`}</b>
+              <span className="route-pci">PCI {r.pci} · {classifyHealth(r.pci)}</span>
+              <span>{r.km.toFixed(1)} km · about {r.minutes} min{r.roads.length ? ` · via ${r.roads.join(', ')}` : ''}</span>
+              <span className="route-basis">
+                {r.measuredPct}% measured{r.uses.length ? ` (${r.uses.join(', ')})` : ''} · {100 - r.measuredPct}% assumed
+              </span>
+            </button>
           ))}
           {a && <button className="secondary" onClick={reset}>Start again</button>}
           <small className="route-note">
-            Only the MDR47 corridor has condition data, so the ranking matters only for routes that use it.
+            Measured PCI comes from DigiRoad surveys. Other roads use an assumed PCI by road class:
+            NH {ASSUMED_PCI.NH}, SH {ASSUMED_PCI.SH}, MDR {ASSUMED_PCI.MDR}, other roads {ASSUMED_PCI.local}.
             Routing © OSRM, map data © OpenStreetMap contributors.
           </small>
         </div>

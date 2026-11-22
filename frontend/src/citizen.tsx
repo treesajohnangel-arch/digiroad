@@ -120,24 +120,86 @@ export function nearestSegment(lat: number, lng: number, segments: Segment[]): {
   return best;
 }
 
+// Area where unsurveyed roads get an assumed PCI (Thiruvananthapuram district). Outside it the planner does not rank.
+export const PLANNER_AREA = { south: 8.15, north: 8.95, west: 76.65, east: 77.3 };
+export const inPlannerArea = ([lat, lng]: [number, number]) =>
+  lat >= PLANNER_AREA.south && lat <= PLANNER_AREA.north && lng >= PLANNER_AREA.west && lng <= PLANNER_AREA.east;
+
+// Assumed PCI for roads not yet surveyed, by road class. Assumptions only: replace with survey data as it arrives.
+export const ASSUMED_PCI = { NH: 75, SH: 65, MDR: 55, local: 50 };
+export function assumedPci(ref: string, name: string): number {
+  const r = `${ref} ${name}`.toUpperCase();
+  // OSM refs come as "NH66", "NH 66" or "SH1"; names as "National Highway 66".
+  if (/\bNH\s*\d|\bNH\b|NATIONAL HIGHWAY/.test(r)) return ASSUMED_PCI.NH;
+  if (/\bSH\s*\d|\bSH\b|STATE HIGHWAY/.test(r)) return ASSUMED_PCI.SH;
+  if (/\bMDR\s*\d|\bMDR\b|MAJOR DISTRICT/.test(r)) return ASSUMED_PCI.MDR;
+  return ASSUMED_PCI.local;
+}
+
+/** One stretch of a route on one road (an OSRM step). */
+export type RoutePart = { path: [number, number][]; road: string; assumed: number };
+export type RouteCandidate = { path: [number, number][]; km: number; minutes: number; parts: RoutePart[] };
+
 /**
- * Score a route ([lat, lng] path) by the surveyed segments it uses: length-weighted PCI over the parts
- * within 40 m of a segment. pci is null when the route uses no surveyed road.
+ * Score a route over its whole length: measured PCI where it runs within 40 m of a surveyed segment,
+ * assumed PCI (by road class) elsewhere, weighted by length.
  */
-export function scoreRoute(path: [number, number][], segments: Segment[]): { pci: number | null; surveyedPct: number } {
+export function scoreRoute(parts: RoutePart[], segments: Segment[]) {
   let total = 0;
-  let surveyed = 0;
+  let measured = 0;
   let weighted = 0;
-  for (let i = 1; i < path.length; i++) {
-    const d = metersBetween(path[i - 1], path[i]);
-    total += d;
-    const hit = nearestSegment((path[i - 1][0] + path[i][0]) / 2, (path[i - 1][1] + path[i][1]) / 2, segments);
-    if (hit && hit.meters <= 40) {
-      surveyed += d;
-      weighted += d * hit.segment.pci;
+  const uses = new Set<string>();
+  const roads = new Map<string, number>();
+  for (const part of parts) {
+    for (let i = 1; i < part.path.length; i++) {
+      const d = metersBetween(part.path[i - 1], part.path[i]);
+      total += d;
+      const hit = nearestSegment((part.path[i - 1][0] + part.path[i][0]) / 2, (part.path[i - 1][1] + part.path[i][1]) / 2, segments);
+      if (hit && hit.meters <= 40) {
+        measured += d;
+        weighted += d * hit.segment.pci;
+        uses.add(hit.segment.id);
+      } else {
+        weighted += d * part.assumed;
+      }
+      if (part.road) roads.set(part.road, (roads.get(part.road) || 0) + d);
     }
   }
-  return { pci: surveyed ? Math.round(weighted / surveyed) : null, surveyedPct: total ? Math.round((100 * surveyed) / total) : 0 };
+  return {
+    pci: total ? Math.round(weighted / total) : ASSUMED_PCI.local,
+    measuredPct: total ? Math.round((100 * measured) / total) : 0,
+    uses: [...uses],
+    roads: [...roads].sort((x, y) => y[1] - x[1]).slice(0, 3).map(([name]) => name),
+  };
+}
+
+export type PlannedRoute = RouteCandidate & ReturnType<typeof scoreRoute>;
+
+/** Share of route a's points that lie within 25 m of route b. */
+function overlap(a: [number, number][], b: [number, number][]): number {
+  const step = Math.max(1, Math.floor(a.length / 40)); // sample about 40 points to keep it fast
+  let near = 0;
+  let n = 0;
+  for (let i = 0; i < a.length; i += step, n++) if (metersToLine(a[i][0], a[i][1], b) <= 25) near++;
+  return n ? near / n : 0;
+}
+
+/**
+ * Compare all candidate routes to the same destination: drop detours over 2x the shortest and near-duplicates,
+ * score each over its whole length, and rank highest PCI first (shorter first on a tie).
+ */
+export function rankRoutes(candidates: RouteCandidate[], segments: Segment[]): PlannedRoute[] {
+  if (!candidates.length) return [];
+  const shortest = Math.min(...candidates.map(c => c.km));
+  const kept: RouteCandidate[] = [];
+  for (const c of [...candidates].sort((x, y) => x.km - y.km)) {
+    if (c.km > 2 * shortest) continue;
+    if (kept.some(k => overlap(c.path, k.path) >= 0.9 && overlap(k.path, c.path) >= 0.9)) continue;
+    kept.push(c);
+  }
+  return kept
+    .map(c => ({ ...c, ...scoreRoute(c.parts, segments) }))
+    .sort((x, y) => y.pci - x.pci || x.km - y.km);
 }
 
 /** "Is my road safe?" in everyday words, from the road health band. */

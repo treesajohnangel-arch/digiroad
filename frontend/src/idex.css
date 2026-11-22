@@ -431,3 +431,31 @@ input::placeholder, textarea::placeholder { color: var(--soft) !important; }
   .track-form div { flex-direction: column; }
   .track-card dl { grid-template-columns: 1fr; }
 }
+
+/* Long complaint form scrolls inside the modal; header stays put. */
+.form-modal { max-height: calc(100vh - 80px); overflow-y: auto; overscroll-behavior: contain; }
+
+/* 3D overview map */
+.map3d { width: 100%; height: 100%; }
+.map3d.loading { display: grid; place-items: center; color: var(--muted); }
+
+/* Complaint map pin, photo, route planner */
+.pin-map { margin: 0 0 14px; }
+.pin-map .leaflet { height: 180px; border: 1px solid var(--line); }
+.pin-map small { display: block; margin-top: 6px; color: var(--muted); }
+.photo-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: -6px 0 14px; }
+.photo-preview img { max-width: 100%; max-height: 220px; object-fit: contain; border: 1px solid var(--line); }
+.route-layout { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
+.route-map { height: 520px; }
+.route-list { display: flex; flex-direction: column; gap: 12px; max-height: 520px; overflow-y: auto; }
+.route-list p { margin: 0; }
+.route-card { display: grid; gap: 4px; padding: 14px 16px; border: 1px solid var(--line); border-left-width: 6px; text-align: left; background: none; color: inherit; font: inherit; cursor: pointer; }
+.route-card.chosen { outline: 2px solid var(--ink, #17233b); outline-offset: -2px; }
+.route-pci { font-size: 18px; font-weight: 700; }
+.route-basis { color: var(--muted); font-size: 13px; }
+.route-note { color: var(--muted); line-height: 1.5; }
+@media (max-width: 900px) {
+  .route-layout { grid-template-columns: 1fr; }
+  .route-map { height: 380px; }
+  .route-list { max-height: none; }
+}
