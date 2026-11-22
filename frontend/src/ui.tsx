@@ -924,6 +924,7 @@ function ComplaintModal({
   });
   const [where, setWhere] = useState('');
   const [pin, setPin] = useState<[number, number] | null>(null);
+  const [nearId, setNearId] = useState(''); // segment nearest the user's location or pin, drawn in blue
   const [photoError, setPhotoError] = useState('');
 
   function set(k: keyof typeof form, v: string | boolean) {
@@ -936,6 +937,7 @@ function ComplaintModal({
     const hit = nearestSegment(lat, lng, segments);
     if (!hit) { setWhere(t.locateFail); return; }
     set('segmentId', hit.segment.id);
+    setNearId(hit.segment.id);
     setWhere(t.located(hit.segment.name, hit.meters));
   }
 
@@ -1009,10 +1011,17 @@ function ComplaintModal({
             <MapContainer {...mapAt(pin || segments[0]?.coords[0] || [8.6262, 76.9105], 15, { scrollWheelZoom: false })}>
               <TileLayer {...OSM_TILES} />
               {segments.map(s => (
-                <Polyline key={s.id} positions={s.coords} pathOptions={{ color: color(s.health), weight: form.segmentId === s.id ? 7 : 4 }} />
+                <Polyline
+                  key={`${s.id}-${s.id === nearId}`}
+                  positions={s.coords}
+                  pathOptions={s.id === nearId
+                    ? { color: '#0073cf', weight: 9, opacity: 1 }
+                    : { color: color(s.health), weight: form.segmentId === s.id ? 7 : 4 }}
+                />
               ))}
               {pin && <CircleMarker {...dotAt(pin, '#fff')} />}
               <MapClicks onClick={pick} />
+              <PanTo point={pin} />
             </MapContainer>
             <small>{t.pinHint}</small>
           </div>
@@ -1078,6 +1087,14 @@ function ComplaintModal({
 
 function MapClicks({ onClick }: { onClick: (lat: number, lng: number) => void }) {
   useMapEvents({ click: (e: { latlng: { lat: number; lng: number } }) => onClick(e.latlng.lat, e.latlng.lng) });
+  return null;
+}
+
+function PanTo({ point }: { point: [number, number] | null }) {
+  const map = useMap();
+  useEffect(() => {
+    if (point) map.panTo(point);
+  }, [point, map]);
   return null;
 }
 
