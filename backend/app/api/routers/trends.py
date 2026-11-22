@@ -3,7 +3,24 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Query, HTTPException, status
 from pydantic import BaseModel
+from zoneinfo import ZoneInfo
 from app.services.supabase_client import supabase
+
+IST = ZoneInfo("Asia/Kolkata")
+
+
+def _ist_date(ts: Any) -> str:
+    """YYYY-MM-DD of a stored timestamp in IST (stored values are UTC; naive ones are taken as UTC)."""
+    raw = str(ts or "")
+    if not raw:
+        return ""
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return raw[:10]
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(IST).strftime("%Y-%m-%d")
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +33,7 @@ from app.schemas.trends import PCIDatapoint, MetricBoxSummary, TrendResponse
 @router.get("/line-graph", response_model=TrendResponse)
 async def get_historical_line_graph(
     segment_id: Optional[str] = Query(None, description="Road segment ID/Name. Optional to prevent 422 errors on initial load."),
-    target_date: Optional[str] = Query(None, description="Format YYYY-MM-DD. Defaults to the segment's latest available evaluation when omitted."),
+    target_date: Optional[str] = Query(None, description="Format YYYY-MM-DD (IST). Defaults to the segment's latest available evaluation when omitted."),
     window_days: int = Query(30, ge=7, le=3650, description="Look-back window in days for the PCI line graph (default 30)."),
 ):
     """
@@ -41,7 +58,7 @@ async def get_historical_line_graph(
                 detail=f"Invalid target_date format: '{target_date}'. Expected YYYY-MM-DD.",
             )
     else:
-        target_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        target_date = datetime.now(IST).strftime("%Y-%m-%d")
 
     # 2. Guard Clause: Missing / None / Empty segment_id -> Return 200 OK empty state
     if not segment_id or not segment_id.strip():
@@ -84,7 +101,7 @@ async def get_historical_line_graph(
                 supabase.table("historic_road_evaluations")
                 .select("*")
                 .eq("segment_id", segment_id)
-                .gte("evaluation_timestamp", target_date)
+                .gte("evaluation_timestamp", f"{target_date}T00:00:00+05:30")
                 .order("evaluation_timestamp", desc=False)
                 .limit(1)
                 .execute()
@@ -104,16 +121,15 @@ async def get_historical_line_graph(
             return empty_state
 
         resolved_row = candidate_res.data[0]
-        raw_ts = str(resolved_row.get("evaluation_timestamp", ""))
-        effective_target_date = raw_ts[:10]
+        effective_target_date = _ist_date(resolved_row.get("evaluation_timestamp"))
 
         # 4. Look-back window: effective_target_date - window_days.
         eff_dt = datetime.strptime(effective_target_date, "%Y-%m-%d").date()
         start_dt = eff_dt - timedelta(days=window_days)
         start_date = start_dt.strftime("%Y-%m-%d")
 
-        start_timestamp = f"{start_date}T00:00:00"
-        end_timestamp = f"{effective_target_date}T23:59:59.999999"
+        start_timestamp = f"{start_date}T00:00:00+05:30"
+        end_timestamp = f"{effective_target_date}T23:59:59.999999+05:30"
 
         window_res = (
             supabase.table("historic_road_evaluations")
@@ -138,7 +154,7 @@ async def get_historical_line_graph(
     # 5. Metric Box Summary (latest snapshot from the resolved effective date)
     records_on_resolved_date = [
         r for r in window_records
-        if str(r.get("evaluation_timestamp", ""))[:10] == effective_target_date
+        if _ist_date(r.get("evaluation_timestamp")) == effective_target_date
     ]
     latest_snapshot = records_on_resolved_date[-1] if records_on_resolved_date else resolved_row
 
@@ -155,7 +171,7 @@ async def get_historical_line_graph(
     # 6. Line Graph Sampling: Filter dataset strictly at 7-day intervals
     daily_records: Dict[str, Dict[str, Any]] = {}
     for r in window_records:
-        d_str = str(r.get("evaluation_timestamp", ""))[:10]
+        d_str = _ist_date(r.get("evaluation_timestamp"))
         if d_str:
             daily_records[d_str] = r
 

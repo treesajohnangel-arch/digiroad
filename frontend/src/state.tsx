@@ -548,7 +548,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     const fullDate = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
     const timeStr = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
     const logItem: TrendPoint = {
-      date: new Date().toISOString().slice(5, 10),
+      date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(5, 10),
       fullDate: `${fullDate} ${timeStr}`,
       pci: newPci,
       health: newHealth,
