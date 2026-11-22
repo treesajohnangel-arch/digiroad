@@ -41,9 +41,21 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { MapContainer, TileLayer, Polyline, ZoomControl, useMap } from 'react-leaflet';
-import { API_BASE, Complaint, Health, Segment, useApp } from './state';
+import { CircleMarker, MapContainer, TileLayer, Polyline, ZoomControl, useMap, useMapEvents } from 'react-leaflet';
+import { API_BASE, Complaint, ComplaintForm, Health, Segment, classifyHealth, useApp } from './state';
+import { LangToggle, PrivacyNotice, T as TXT, TrackComplaint, metersBetween, nearestSegment, roadInPlainWords, scoreRoute, shrinkPhoto } from './citizen';
 import photoCredits from './photoCredits.json';
+
+// No @types/leaflet in this project, so react-leaflet props are cast (same as LeafletMap below).
+const OSM_TILES = {
+  url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  maxZoom: 19,
+  attribution: '&copy; OpenStreetMap contributors',
+} as React.ComponentProps<typeof TileLayer>;
+const mapAt = (center: [number, number], zoom: number, extra: Record<string, unknown> = {}) =>
+  ({ center, zoom, maxZoom: 19, className: 'leaflet', ...extra }) as React.ComponentProps<typeof MapContainer>;
+const dotAt = (center: [number, number], fillColor: string) =>
+  ({ center, radius: 8, pathOptions: { color: '#17233b', fillColor, fillOpacity: 1, weight: 3 } }) as React.ComponentProps<typeof CircleMarker>;
 
 const hc = (h: Health) => h.toLowerCase().replace(' ', '-');
 const color = (h: Health) =>
@@ -164,6 +176,8 @@ const NAV_LINKS: [string, string][] = [
   ['/simulations', 'Simulations'],
   ['/trends', 'Trends'],
   ['/repaired', 'Repairs'],
+  ['/track', 'Track complaint'],
+  ['/route', 'Route planner'],
   ['/admin', 'Admin'],
 ];
 
@@ -269,6 +283,9 @@ function Shell() {
             <Route path="/trends" element={<Trends />} />
             <Route path="/repaired" element={<RepairHistory />} />
             <Route path="/admin" element={<Admin />} />
+            <Route path="/track" element={<TrackComplaint />} />
+            <Route path="/route" element={<RoutePlanner />} />
+            <Route path="/privacy" element={<PrivacyNotice />} />
           </Routes>
         </div>
         <footer className="ix-foot">
@@ -291,6 +308,13 @@ function Shell() {
               {NAV_LINKS.map(([to, label]) => (
                 <NavLink key={to} to={to}>{label}</NavLink>
               ))}
+            </div>
+            <div>
+              <h4>Open data</h4>
+              <a href={`${API_BASE}/api/home/export.csv`}>Segment health (CSV)</a>
+              <a href={`${API_BASE}/api/home/map-data`} target="_blank" rel="noreferrer">Segment health (GeoJSON)</a>
+              <a href={`${API_BASE}/docs`} target="_blank" rel="noreferrer">API documentation</a>
+              <NavLink to="/privacy">Privacy notice</NavLink>
             </div>
             <div>
               <h4>Back to top</h4>
@@ -818,6 +842,7 @@ function ComplaintTable({
 }
 
 function SegmentModal({ segment: s, close }: { segment: Segment; close: () => void }) {
+  const { lang } = useApp();
   return (
     <div className="modal-backdrop" onClick={close}>
       <div className="modal" onClick={e => e.stopPropagation()}>
@@ -826,7 +851,7 @@ function SegmentModal({ segment: s, close }: { segment: Segment; close: () => vo
             <div className="kicker">Segment condition · {s.id}</div>
             <h2>{s.name}</h2>
           </div>
-          <button className="icon-close" onClick={close}>
+          <button className="icon-close" onClick={close} aria-label="Close">
             <X />
           </button>
         </div>
@@ -837,6 +862,10 @@ function SegmentModal({ segment: s, close }: { segment: Segment; close: () => vo
             {s.pci}
             <small>PCI score</small>
           </b>
+        </div>
+        <div className="plain-words" role="note" lang={lang}>
+          <b>{TXT[lang].safeQ}</b>
+          <p>{roadInPlainWords(s.health, lang)}</p>
         </div>
         <div className="metric-grid">
           {[
@@ -869,9 +898,10 @@ function ComplaintModal({
   submit,
 }: {
   close: () => void;
-  submit: (c: Omit<Complaint, 'id' | 'status' | 'created'>) => Promise<boolean>;
+  submit: (c: ComplaintForm) => Promise<boolean>;
 }) {
-  const { segments } = useApp();
+  const { segments, lang } = useApp();
+  const t = TXT[lang];
   const [form, F] = useState({
     citizen: '',
     contact: '',
@@ -879,10 +909,46 @@ function ComplaintModal({
     category: 'Pothole',
     severity: 'Medium',
     description: '',
+    consent: false,
+    website: '',
+    photo: '',
   });
+  const [where, setWhere] = useState('');
+  const [pin, setPin] = useState<[number, number] | null>(null);
+  const [photoError, setPhotoError] = useState('');
 
-  function set(k: keyof typeof form, v: string) {
+  function set(k: keyof typeof form, v: string | boolean) {
     F(f => ({ ...f, [k]: v }));
+  }
+
+  // Map tap or GPS fix: pick the nearest surveyed segment.
+  function pick(lat: number, lng: number) {
+    setPin([lat, lng]);
+    const hit = nearestSegment(lat, lng, segments);
+    if (!hit) { setWhere(t.locateFail); return; }
+    set('segmentId', hit.segment.id);
+    setWhere(t.located(hit.segment.name, hit.meters));
+  }
+
+  async function pickPhoto(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    setPhotoError('');
+    if (!file) return;
+    try {
+      set('photo', await shrinkPhoto(file));
+    } catch {
+      setPhotoError(t.photoFail);
+    }
+  }
+
+  function locate() {
+    if (!navigator.geolocation) { setWhere(t.locateFail); return; }
+    setWhere(t.locating);
+    navigator.geolocation.getCurrentPosition(
+      pos => pick(pos.coords.latitude, pos.coords.longitude),
+      () => setWhere(t.locateFail),
+      { enableHighAccuracy: true, timeout: 10000 },
+    );
   }
 
   async function send(e: React.FormEvent) {
@@ -892,29 +958,30 @@ function ComplaintModal({
 
   return (
     <div className="modal-backdrop" onClick={close}>
-      <div className="modal form-modal" onClick={e => e.stopPropagation()}>
+      <div className="modal form-modal" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="complaint-title" lang={lang}>
         <div className="modal-head">
           <div>
-            <div className="kicker">Citizen feedback</div>
-            <h2>Report a road issue</h2>
+            <div className="kicker">{t.kicker}</div>
+            <h2 id="complaint-title">{t.title}</h2>
           </div>
-          <button className="icon-close" onClick={close}>
+          <LangToggle />
+          <button className="icon-close" onClick={close} aria-label="Close">
             <X />
           </button>
         </div>
         <form onSubmit={send} className="complaint-form">
           <div className="form-two">
             <label>
-              Citizen name
-              <input required value={form.citizen} onChange={e => set('citizen', e.target.value)} />
+              {t.name}
+              <input required autoComplete="name" value={form.citizen} onChange={e => set('citizen', e.target.value)} />
             </label>
             <label>
-              Contact number
-              <input required type="tel" value={form.contact} onChange={e => set('contact', e.target.value)} />
+              {t.contact}
+              <input required type="tel" autoComplete="tel" value={form.contact} onChange={e => set('contact', e.target.value)} />
             </label>
           </div>
           <label>
-            Road segment
+            {t.segment}
             <select value={form.segmentId} onChange={e => set('segmentId', e.target.value)}>
               {segments.map(s => (
                 <option key={s.id} value={s.id}>
@@ -923,9 +990,26 @@ function ComplaintModal({
               ))}
             </select>
           </label>
+          <div className="locate-row">
+            <button type="button" className="secondary" onClick={locate}>
+              <MapPin size={15} /> {t.locate}
+            </button>
+            {where && <small aria-live="polite">{where}</small>}
+          </div>
+          <div className="pin-map">
+            <MapContainer {...mapAt(pin || segments[0]?.coords[0] || [8.6262, 76.9105], 15, { scrollWheelZoom: false })}>
+              <TileLayer {...OSM_TILES} />
+              {segments.map(s => (
+                <Polyline key={s.id} positions={s.coords} pathOptions={{ color: color(s.health), weight: form.segmentId === s.id ? 7 : 4 }} />
+              ))}
+              {pin && <CircleMarker {...dotAt(pin, '#fff')} />}
+              <MapClicks onClick={pick} />
+            </MapContainer>
+            <small>{t.pinHint}</small>
+          </div>
           <div className="form-two">
             <label>
-              Issue category
+              {t.category}
               <select value={form.category} onChange={e => set('category', e.target.value)}>
                 {['Pothole', 'Surface damage', 'Cracking', 'Drainage', 'Road marking', 'Other'].map(o => (
                   <option key={o}>{o}</option>
@@ -933,7 +1017,7 @@ function ComplaintModal({
               </select>
             </label>
             <label>
-              Severity
+              {t.severity}
               <select value={form.severity} onChange={e => set('severity', e.target.value)}>
                 {['Low', 'Medium', 'High', 'Critical'].map(o => (
                   <option key={o}>{o}</option>
@@ -942,27 +1026,147 @@ function ComplaintModal({
             </label>
           </div>
           <label>
-            Description
+            {t.description}
             <textarea
               required
               maxLength={400}
               rows={4}
               value={form.description}
               onChange={e => set('description', e.target.value)}
-              placeholder="Location and condition"
+              placeholder={t.descHint}
             />
+          </label>
+          <label>
+            {t.photo}
+            <input type="file" accept="image/jpeg,image/png,image/*" onChange={pickPhoto} />
+          </label>
+          {photoError && <div className="error" role="alert">{photoError}</div>}
+          {form.photo && (
+            <div className="photo-preview">
+              <img src={form.photo} alt={t.photo} />
+              <button type="button" className="secondary" onClick={() => set('photo', '')}>{t.photoRemove}</button>
+            </div>
+          )}
+          {/* Honeypot: hidden from people and screen readers; bots that fill it are rejected. */}
+          <input className="hp-field" tabIndex={-1} autoComplete="off" aria-hidden="true" value={form.website} onChange={e => set('website', e.target.value)} name="website" />
+          <label className="consent">
+            <input type="checkbox" required checked={form.consent} onChange={e => set('consent', e.target.checked)} />
+            <span>{t.consent} <a href="/privacy" target="_blank" rel="noreferrer">{t.privacy}</a>.</span>
           </label>
           <div className="form-actions">
             <button type="button" className="secondary" onClick={close}>
-              Cancel
+              {t.cancel}
             </button>
             <button className="primary">
-              <Send size={15} /> Submit complaint
+              <Send size={15} /> {t.submit}
             </button>
           </div>
         </form>
       </div>
     </div>
+  );
+}
+
+function MapClicks({ onClick }: { onClick: (lat: number, lng: number) => void }) {
+  useMapEvents({ click: (e: { latlng: { lat: number; lng: number } }) => onClick(e.latlng.lat, e.latlng.lng) });
+  return null;
+}
+
+type PlannedRoute = { path: [number, number][]; km: number; minutes: number; pci: number | null; surveyedPct: number };
+
+// Smoothest route: OSRM gives up to 3 alternatives, ranked here by the PCI of surveyed segments they use.
+// shortcut: public OSRM demo server (light use only, no SLA); self-host OSRM or use a paid router before heavy traffic.
+function RoutePlanner() {
+  const { segments } = useApp();
+  const [a, setA] = useState<[number, number] | null>(null);
+  const [b, setB] = useState<[number, number] | null>(null);
+  const [routes, setRoutes] = useState<PlannedRoute[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function plan(from: [number, number], to: [number, number]) {
+    setBusy(true); setError(''); setRoutes([]);
+    try {
+      const url = `https://router.project-osrm.org/route/v1/driving/${from[1]},${from[0]};${to[1]},${to[0]}?alternatives=3&overview=full&geometries=geojson`;
+      const res = await fetch(url);
+      const body = await res.json();
+      if (!res.ok || body.code !== 'Ok') throw new Error(body.message || `Routing failed (${res.status})`);
+      const found: PlannedRoute[] = body.routes.map((r: { geometry: { coordinates: [number, number][] }; distance: number; duration: number }) => {
+        const path = r.geometry.coordinates.map(([lon, lat]) => [lat, lon] as [number, number]);
+        return { path, km: r.distance / 1000, minutes: Math.round(r.duration / 60), ...scoreRoute(path, segments) };
+      });
+      // Best known surface first; routes on no surveyed road go last, shortest first.
+      found.sort((x, y) => (y.pci ?? -1) - (x.pci ?? -1) || x.km - y.km);
+      setRoutes(found);
+    } catch (err) {
+      setError(err instanceof TypeError ? 'Routing service not reachable. Check your connection and try again.' : err instanceof Error ? err.message : 'Routing failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function reset() {
+    setA(null); setB(null); setRoutes([]); setError('');
+  }
+
+  function pick(lat: number, lng: number) {
+    if (!a || b) { reset(); setA([lat, lng]); return; }
+    if (metersBetween(a, [lat, lng]) < 20) return; // second tap on the start point
+    setB([lat, lng]);
+    void plan(a, [lat, lng]);
+  }
+
+  const best = routes[0];
+  return (
+    <>
+      <Heading
+        eyebrow="Route planner · surveyed road condition"
+        title="Find the smoothest route"
+        description="Tap the map to set the start (A), then the destination (B). Routes are ranked by the condition of the DigiRoad segments they use."
+      />
+      <div className="route-layout">
+        <div className="map-wrap route-map">
+          <MapContainer {...mapAt(segments[0]?.coords[0] || [8.6262, 76.9105], 14)}>
+            <TileLayer {...OSM_TILES} />
+            {segments.map(s => (
+              <Polyline key={s.id} positions={s.coords} pathOptions={{ color: color(s.health), weight: 4, opacity: 0.6 }} />
+            ))}
+            {/* Alternatives first so the best route draws on top. */}
+            {routes.map((r, i) => i > 0 && (
+              <Polyline key={i} positions={r.path} pathOptions={{ color: '#6b7680', weight: 5, opacity: 0.7, dashArray: '6 8' }} />
+            ))}
+            {best && (
+              <Polyline positions={best.path} pathOptions={{ color: best.pci === null ? '#0073cf' : color(classifyHealth(best.pci)), weight: 7 }} />
+            )}
+            {a && <CircleMarker {...dotAt(a, '#16A34A')} />}
+            {b && <CircleMarker {...dotAt(b, '#DC2626')} />}
+            <MapClicks onClick={pick} />
+          </MapContainer>
+        </div>
+        <div className="route-list" aria-live="polite">
+          {!a && <p>Tap the map to set the start point (A).</p>}
+          {a && !b && <p>Now tap the destination (B).</p>}
+          {busy && <p>Finding routes…</p>}
+          {error && <div className="error" role="alert">{error}</div>}
+          {routes.map((r, i) => (
+            <div key={i} className={`route-card ${i === 0 ? 'best' : ''}`}>
+              <b>{i === 0 ? 'Smoothest route' : `Alternative ${i}`}</b>
+              <span>{r.km.toFixed(1)} km · about {r.minutes} min</span>
+              {r.pci === null ? (
+                <span>Uses no surveyed road. Condition unknown.</span>
+              ) : (
+                <span>Surveyed road PCI {r.pci} ({classifyHealth(r.pci)}) · {r.surveyedPct}% of the route surveyed</span>
+              )}
+            </div>
+          ))}
+          {a && <button className="secondary" onClick={reset}>Start again</button>}
+          <small className="route-note">
+            Only the MDR47 corridor has condition data, so the ranking matters only for routes that use it.
+            Routing © OSRM, map data © OpenStreetMap contributors.
+          </small>
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -1630,7 +1834,7 @@ function Admin() {
                 </div>
                 <h2>Asphalt patching</h2>
               </div>
-              <button className="icon-close" onClick={() => !submitting && setPatchModalComplaint(null)}>
+              <button className="icon-close" onClick={() => !submitting && setPatchModalComplaint(null)} aria-label="Close">
                 <X />
               </button>
             </div>
@@ -1722,7 +1926,7 @@ function Admin() {
                 </div>
                 <h2>Full resurfacing</h2>
               </div>
-              <button className="icon-close" onClick={() => !submitting && setResurfaceModalComplaint(null)}>
+              <button className="icon-close" onClick={() => !submitting && setResurfaceModalComplaint(null)} aria-label="Close">
                 <X />
               </button>
             </div>
@@ -1788,7 +1992,7 @@ function ComplaintDetailModal({
             <div className="kicker">Complaint · {c.id}</div>
             <h2>{c.category}</h2>
           </div>
-          <button className="icon-close" onClick={close} title="Close">
+          <button className="icon-close" onClick={close} title="Close" aria-label="Close">
             <X size={18} />
           </button>
         </div>
@@ -1830,6 +2034,15 @@ function ComplaintDetailModal({
             )}
           </div>
         </div>
+
+        {c.photoUrl && (
+          <div className="detail-section">
+            <div className="detail-label">Photo from the reporter</div>
+            <a href={c.photoUrl} target="_blank" rel="noreferrer" className="photo-preview">
+              <img src={c.photoUrl} alt={`Photo for complaint ${c.id}`} loading="lazy" />
+            </a>
+          </div>
+        )}
 
         <div className="detail-section">
           <div className="detail-label">Citizen report</div>

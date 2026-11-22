@@ -33,7 +33,10 @@ export type Complaint = {
   created: string;
   repairedAt?: string;
   repairType?: 'PATCHING' | 'FULL_RESURFACING';
+  photoUrl?: string;
 };
+
+export type ComplaintForm = Omit<Complaint, 'id' | 'status' | 'created' | 'photoUrl'> & { consent: boolean; website: string; photo: string };
 
 type ApiComplaint = {
   complaint_id: string;
@@ -47,6 +50,7 @@ type ApiComplaint = {
   citizen_name?: string | null;
   contact?: string | null;
   severity?: string | null;
+  photo_url?: string | null;
 };
 
 export function normalizeStatus(st?: string | null): 'nil' | 'Under Progress' | 'Repaired' {
@@ -76,6 +80,7 @@ function fromApiComplaint(row: ApiComplaint): Complaint {
     repairedAt: row.repaired_at || undefined,
     repairType: ['PATCHING', 'FULL_RESURFACING'].includes(String(row.repair_type || '').toUpperCase())
       ? String(row.repair_type).toUpperCase() as Complaint['repairType'] : undefined,
+    photoUrl: row.photo_url || undefined,
   };
 }
 
@@ -156,14 +161,23 @@ type AppState = {
   archivedRepairIds: string[];
   refreshRepairBuckets: () => Promise<void>;
   liveData: boolean; // true once road values have loaded from dynamic_road_evaluations
-  addComplaint: (c: Omit<Complaint, 'id' | 'status' | 'created'>) => Promise<boolean>;
+  addComplaint: (c: ComplaintForm) => Promise<boolean>;
   markUnderProcess: (id: string) => Promise<boolean>;
   repair: (id: string) => void;
   executeRepair: (payload: RepairActionPayload) => Promise<boolean>;
   trendLogs: Record<string, TrendPoint[]>;
   toast: string;
   notify: (s: string) => void;
+  lang: 'en' | 'ml';
+  setLang: (l: 'en' | 'ml') => void;
 };
+
+// Complaints filed without signal wait here (localStorage) and are sent when the connection returns.
+const OUTBOX_KEY = 'digiroad-outbox';
+const readOutbox = (): Record<string, unknown>[] => {
+  try { return JSON.parse(window.localStorage.getItem(OUTBOX_KEY) || '[]'); } catch { return []; }
+};
+const writeOutbox = (items: Record<string, unknown>[]) => window.localStorage.setItem(OUTBOX_KEY, JSON.stringify(items));
 
 const Ctx = createContext<AppState | null>(null);
 
@@ -182,6 +196,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [liveData, setLiveData] = useState(false);
   const [trendLogs, setTrendLogs] = useState<Record<string, TrendPoint[]>>({});
   const [toast, setToast] = useState('');
+  const [lang, setLangState] = useState<'en' | 'ml'>(() => window.localStorage.getItem('digiroad-lang') === 'ml' ? 'ml' : 'en');
+  const setLang = (l: 'en' | 'ml') => { setLangState(l); window.localStorage.setItem('digiroad-lang', l); };
 
   const refreshRepairBuckets = useCallback(async () => {
     if (!authToken) return;
@@ -207,9 +223,35 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }
   }, [authToken]);
 
+  // Send complaints queued while offline, oldest first. Stops at the first network error or 429 and tries again later.
+  const flushOutbox = useCallback(async () => {
+    if (!authToken || !navigator.onLine) return;
+    let items = readOutbox();
+    while (items.length) {
+      let res: Response;
+      try {
+        res = await fetch(`${API_BASE}/api/complaints/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify(items[0]),
+        });
+      } catch {
+        return;
+      }
+      // Keep it for later on rate limit, expired sign-in or server trouble; drop only if the server rejects the content.
+      if (res.status === 429 || res.status === 401 || res.status >= 500) return;
+      const body = await res.json().catch(() => ({}));
+      setToast(res.ok ? `Offline complaint sent as #${body.complaint_id}.` : `An offline complaint was rejected: ${body.detail || res.status}`);
+      window.setTimeout(() => setToast(''), 3500);
+      items = items.slice(1);
+      writeOutbox(items);
+    }
+  }, [authToken]);
+
   // Reload complaints (all users) and live road values (dynamic_road_evaluations) from the backend.
   const refreshAll = useCallback(async () => {
     if (!authToken) return;
+    await flushOutbox();
     const headers = { Authorization: `Bearer ${authToken}` };
     await Promise.all([
       fetch(`${API_BASE}/api/complaints`, { headers }).then(res => (res.ok ? res.json() : null)).catch(() => null),
@@ -245,7 +287,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         }
       });
     await refreshRepairBuckets();
-  }, [authToken, refreshRepairBuckets]);
+  }, [authToken, refreshRepairBuckets, flushOutbox]);
 
   useEffect(() => {
     if (!authToken || !loggedIn) return;
@@ -256,9 +298,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }, 30000);
     const onFocus = () => void refreshAll();
     window.addEventListener('focus', onFocus);
+    window.addEventListener('online', onFocus);
     return () => {
       window.clearInterval(timer);
       window.removeEventListener('focus', onFocus);
+      window.removeEventListener('online', onFocus);
     };
   }, [authToken, loggedIn, refreshAll]);
 
@@ -340,20 +384,41 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const addComplaint = async (form: Omit<Complaint, 'id' | 'status' | 'created'>): Promise<boolean> => {
+  const addComplaint = async (form: ComplaintForm): Promise<boolean> => {
+    const payload = {
+      segment_id: form.segmentId,
+      complaint_heading: form.category,
+      description: form.description,
+      citizen_name: form.citizen,
+      contact: form.contact,
+      severity: form.severity,
+      consent: form.consent,
+      website: form.website,
+      photo_base64: form.photo || undefined,
+    };
+    const queue = () => {
+      try {
+        writeOutbox([...readOutbox(), payload]);
+        notify('No connection. Complaint saved on this device and will be sent automatically.');
+        return true;
+      } catch {
+        notify('No connection, and this device has no room to store the complaint. Try without the photo.');
+        return false;
+      }
+    };
+    if (!navigator.onLine) return queue();
     try {
-      const res = await fetch(`${API_BASE}/api/complaints/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          segment_id: form.segmentId,
-          complaint_heading: form.category,
-          description: form.description,
-          citizen_name: form.citizen,
-          contact: form.contact,
-          severity: form.severity,
-        }),
-      });
+      let res: Response;
+      try {
+        res = await fetch(`${API_BASE}/api/complaints/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
+          body: JSON.stringify(payload),
+        });
+      } catch (err) {
+        if (err instanceof TypeError) return queue();
+        throw err;
+      }
       if (res.ok) {
         const data = await res.json();
         const newC = fromApiComplaint(data);
@@ -362,7 +427,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         newC.severity = form.severity;
         newC.status = 'nil';
         setComplaints(prev => [newC, ...prev]);
-        notify('Complaint submitted with status nil · Awaiting admin review');
+        notify(`Complaint #${newC.id} submitted. Use this number on Track complaint to follow it.`);
         return true;
       }
       const body = await res.json().catch(() => ({}));
@@ -545,8 +610,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       trendLogs,
       toast,
       notify,
+      lang,
+      setLang,
     }),
-    [role, user, authToken, loggedIn, segmentsList, complaints, recentRepairIds, archivedRepairIds, refreshRepairBuckets, liveData, trendLogs, toast]
+    [role, user, authToken, loggedIn, segmentsList, complaints, recentRepairIds, archivedRepairIds, refreshRepairBuckets, liveData, trendLogs, toast, lang]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

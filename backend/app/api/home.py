@@ -3,7 +3,10 @@ import json
 import logging
 from pathlib import Path
 from typing import Dict, Any, List
+import csv
+import io
 from fastapi import APIRouter, Query
+from fastapi.responses import Response
 from app.services.decay_model import calculate_road_health, get_health_color_hex
 from app.services.supabase_client import supabase
 
@@ -280,3 +283,18 @@ async def search_segments(q: str = Query(..., min_length=1, description="Search 
         "results": results,
     }
 
+
+
+@router.get("/export.csv")
+async def export_segments_csv():
+    """Open data: current health of every segment as CSV (GeoJSON is /api/home/map-data)."""
+    data = await get_map_data()
+    cols = ["segment_id", "road_name", "chainage", "pci_score", "road_health", "iri_m_km",
+            "cracking_pct", "rut_depth_mm", "raveling_pct", "patching_pct", "pothole_pct"]
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
+    writer.writeheader()
+    for f in data["features"]:
+        writer.writerow(f["properties"])
+    return Response(buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": 'attachment; filename="digiroad-segments.csv"'})

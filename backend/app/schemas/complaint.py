@@ -18,6 +18,14 @@ class ComplaintCreate(BaseModel):
     citizen_name: Optional[str] = None
     contact: Optional[str] = None
     severity: Optional[str] = None
+    consent: bool = Field(False, description="Citizen agreed to the privacy notice")
+    website: Optional[str] = Field(None, description="Honeypot: real users never fill this hidden field")
+    photo_base64: Optional[str] = Field(None, max_length=1_500_000, description="Optional JPEG/PNG photo, base64 or data URL, max 1 MB decoded")
+
+
+class ComplaintFeedback(BaseModel):
+    fixed: bool = Field(..., description="Citizen says the road is fixed")
+    comment: Optional[str] = Field(None, max_length=300)
 
 
 class ComplaintResponse(BaseModel):
@@ -32,6 +40,7 @@ class ComplaintResponse(BaseModel):
     citizen_name: Optional[str] = None
     contact: Optional[str] = None
     severity: Optional[str] = None
+    photo_url: Optional[str] = None
 
     @field_validator("complaint_id", mode="before")
     @classmethod

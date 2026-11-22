@@ -1,6 +1,10 @@
+import base64
+import binascii
 import uuid
 import re
+import time
 import logging
+from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,6 +13,7 @@ from app.services.supabase_client import supabase
 from app.schemas.complaint import (
     ComplaintStatus,
     ComplaintCreate,
+    ComplaintFeedback,
     ComplaintResponse,
     ComplaintSchema,
     Complaint,
@@ -37,6 +42,67 @@ def normalize_segment_id(seg_id: str) -> str:
 
 # In-memory fallback store, used only when Supabase is unavailable. Starts empty.
 IN_MEMORY_COMPLAINTS: List[Dict[str, Any]] = []
+
+# shortcut: per-process memory, resets on restart and is not shared between backends; move to Redis/DB if spam gets past it.
+RATE_LIMIT_PER_HOUR = 5
+_recent_submissions: Dict[str, deque] = defaultdict(deque)
+CONTACT_RETENTION_DAYS = 180
+PHOTO_BUCKET = "complaint-photos"
+MAX_PHOTO_BYTES = 1_000_000
+
+
+def _decode_photo(raw: str) -> tuple[bytes, str]:
+    """Validate a base64 photo (plain or data URL). Returns (bytes, extension). Trust boundary: check size and magic bytes."""
+    try:
+        data = base64.b64decode(raw.split(",", 1)[-1], validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Photo is not valid base64.")
+    if len(data) > MAX_PHOTO_BYTES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Photo must be 1 MB or smaller.")
+    if data.startswith(b"\xff\xd8\xff"):
+        return data, "jpg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return data, "png"
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Photo must be a JPEG or PNG image.")
+
+
+def _upload_photo(raw: str) -> str:
+    data, ext = _decode_photo(raw)
+    if supabase is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Photo storage is not configured.")
+    path = f"{uuid.uuid4().hex}.{ext}"  # random name: public bucket, so the URL must not be guessable
+    try:
+        supabase.storage.from_(PHOTO_BUCKET).upload(path, data, {"content-type": f"image/{'jpeg' if ext == 'jpg' else 'png'}"})
+        return supabase.storage.from_(PHOTO_BUCKET).get_public_url(path)
+    except Exception as e:
+        logger.warning(f"Photo upload failed: {e}")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Photo could not be saved. Try again, or submit without a photo.") from e
+
+
+def _check_rate_limit(user_id: str) -> None:
+    now = time.time()
+    hits = _recent_submissions[user_id]
+    while hits and now - hits[0] > 3600:
+        hits.popleft()
+    if len(hits) >= RATE_LIMIT_PER_HOUR:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many complaints in the last hour. Please try again later.")
+    hits.append(now)
+
+
+def redact_old_contacts(days: int = CONTACT_RETENTION_DAYS) -> int:
+    """Retention rule: remove citizen name and contact from complaints repaired more than `days` ago."""
+    if supabase is None:
+        return 0
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    res = (
+        supabase.table("user_complaints")
+        .update({"citizen_name": None, "contact": None})
+        .eq("status", "repaired")
+        .lt("repaired_at", cutoff)
+        .not_.is_("contact", "null")
+        .execute()
+    )
+    return len(res.data or [])
 
 
 
@@ -73,7 +139,7 @@ def _redact_complaint_contacts(records: List[Dict[str, Any]], current_user: Dict
 
 
 @router.post("/generate", response_model=ComplaintResponse, status_code=status.HTTP_201_CREATED)
-async def generate_complaint(complaint_in: ComplaintCreate):
+async def generate_complaint(complaint_in: ComplaintCreate, current_user: Dict[str, Any] = Depends(get_current_user)):
     """
     Generate/Submit a new citizen or engineer road complaint.
     - Accepts segment_id (e.g. 'MDR47 S01' or 'MDR47-S01'), description, and optional complaint_heading.
@@ -82,6 +148,12 @@ async def generate_complaint(complaint_in: ComplaintCreate):
     - Inserts record into Supabase table user_complaints with status as 'nil'.
     - Returns 201 Created with the inserted record.
     """
+    if complaint_in.website:  # honeypot: hidden field only bots fill in
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Complaint rejected.")
+    if (complaint_in.citizen_name or complaint_in.contact) and not complaint_in.consent:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Please accept the privacy notice to share your name and contact.")
+    _check_rate_limit(str(current_user.get("id")))
+
     target_segment = normalize_segment_id(complaint_in.segment_id)
     if not target_segment:
         raise HTTPException(
@@ -102,6 +174,7 @@ async def generate_complaint(complaint_in: ComplaintCreate):
         )
 
     heading = complaint_in.complaint_heading.strip() if complaint_in.complaint_heading else "Road Complaint"
+    photo_url = _upload_photo(complaint_in.photo_base64) if complaint_in.photo_base64 else None
     now = datetime.now(timezone.utc).isoformat()
     generated_cmp_id = f"cmp-{uuid.uuid4().hex[:8]}"
 
@@ -132,6 +205,8 @@ async def generate_complaint(complaint_in: ComplaintCreate):
                 "contact": complaint_in.contact,
                 "severity": complaint_in.severity,
             }
+            if photo_url:  # only send the column when used, so old databases without it keep working
+                db_payload["photo_url"] = photo_url
             res = supabase.table("user_complaints").insert(db_payload).execute()
             if res.data and len(res.data) > 0:
                 created = res.data[0]
@@ -334,3 +409,47 @@ async def complete_complaint(complaint_id: str):
         status_code=status.HTTP_409_CONFLICT,
         detail="A complaint cannot be marked repaired without recording its repair. Use the admin repair action with PATCHING or FULL_RESURFACING.",
     )
+
+
+@router.get("/track/{complaint_id}")
+async def track_complaint(complaint_id: str, _user: Dict[str, Any] = Depends(get_current_user)):
+    """Status of one complaint, for the citizen following it up. No name or contact is returned."""
+    if supabase is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is not configured.")
+    if not complaint_id.isdigit():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Complaint ID is a number, for example 27.")
+    res = supabase.table("user_complaints").select("*").eq("complaint_id", int(complaint_id)).execute()
+    if not res.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No complaint with ID {complaint_id}.")
+    row = res.data[0]
+    keep = ("complaint_id", "segment_id", "complaint_heading", "description", "status", "severity",
+            "created_at", "repaired_at", "repair_type", "citizen_feedback", "feedback_at")
+    out = {k: row.get(k) for k in keep}
+    out["complaint_id"] = str(out["complaint_id"])
+    return out
+
+
+@router.post("/{complaint_id}/feedback")
+async def complaint_feedback(complaint_id: str, payload: ComplaintFeedback, _user: Dict[str, Any] = Depends(get_current_user)):
+    """After a repair, the citizen says whether the road is really fixed."""
+    if supabase is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is not configured.")
+    if not complaint_id.isdigit():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid complaint ID.")
+    comment = (payload.comment or "").strip()
+    answer = ("fixed" if payload.fixed else "not fixed") + (f": {comment}" if comment else "")
+    try:
+        res = (
+            supabase.table("user_complaints")
+            .update({"citizen_feedback": answer, "feedback_at": datetime.now(timezone.utc).isoformat()})
+            .eq("complaint_id", int(complaint_id))
+            .eq("status", "repaired")
+            .execute()
+        )
+    except Exception as e:
+        logger.error("Feedback save failed for %s: %s", complaint_id, e)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="Feedback could not be saved. The database needs the citizen_feedback and feedback_at columns.") from e
+    if not res.data:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Feedback is only possible after the complaint is repaired.")
+    return {"complaint_id": complaint_id, "citizen_feedback": answer}

@@ -38,6 +38,11 @@ async def run_weekly_simulation_job() -> None:
         logger.info("Weekly simulation complete: %d/%d segments updated.", ok, len(results))
     except Exception as e:
         logger.error("Weekly simulation job failed: %s", e, exc_info=True)
+    try:
+        from app.api.routers.complaints import redact_old_contacts
+        logger.info("Retention: removed contact details from %d old repaired complaints.", redact_old_contacts())
+    except Exception as e:
+        logger.error("Retention cleanup failed: %s", e)
 
 
 async def check_and_run_startup_catchup() -> None:
