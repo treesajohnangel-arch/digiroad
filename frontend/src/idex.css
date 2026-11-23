@@ -445,6 +445,12 @@ input::placeholder, textarea::placeholder { color: var(--soft) !important; }
 .pin-map small { display: block; margin-top: 6px; color: var(--muted); }
 .photo-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: -6px 0 14px; }
 .photo-preview img { max-width: 100%; max-height: 220px; object-fit: contain; border: 1px solid var(--line); }
+.detect-frame { position: relative; display: inline-block; max-width: 100%; }
+.detect-frame img { display: block; }
+.detect-box { position: absolute; border: 2px solid #e8590c; pointer-events: none; }
+.detect-box span { position: absolute; left: -2px; bottom: 100%; background: #e8590c; color: #fff; font: 600 11px/1.4 var(--mono); padding: 0 4px; white-space: nowrap; }
+.detect-result { display: grid; gap: 4px; margin: -6px 0 14px; padding: 10px 12px; border: 1px dashed var(--line); background: var(--tile); }
+.detect-result small { color: var(--muted); }
 .route-layout { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
 .route-map { height: 520px; }
 .route-list { display: flex; flex-direction: column; gap: 12px; max-height: 520px; overflow-y: auto; }

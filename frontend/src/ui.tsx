@@ -43,7 +43,7 @@ import {
 } from 'recharts';
 import { CircleMarker, MapContainer, TileLayer, Polyline, ZoomControl, useMap, useMapEvents } from 'react-leaflet';
 import { API_BASE, Complaint, ComplaintForm, Health, Segment, classifyHealth, useApp } from './state';
-import { LangToggle, PrivacyNotice, T as TXT, TrackComplaint, ASSUMED_PCI, assumedPci, inPlannerArea, metersBetween, nearestSegment, rankRoutes, roadInPlainWords, shrinkPhoto } from './citizen';
+import { LangToggle, PrivacyNotice, T as TXT, TrackComplaint, ASSUMED_PCI, assumedPci, inPlannerArea, metersBetween, nearestSegment, rankRoutes, roadInPlainWords, shrinkPhoto, suggestFromDetection, type Detection } from './citizen';
 import type { PlannedRoute, RouteCandidate } from './citizen';
 import photoCredits from './photoCredits.json';
 
@@ -909,8 +909,9 @@ function ComplaintModal({
   close: () => void;
   submit: (c: ComplaintForm) => Promise<boolean>;
 }) {
-  const { segments, lang } = useApp();
+  const { segments, lang, authToken } = useApp();
   const t = TXT[lang];
+  const [scan, setScan] = useState<{ state: 'idle' | 'busy' | 'done' | 'fail'; found?: Detection[]; size?: { width: number; height: number } }>({ state: 'idle' });
   const [form, F] = useState({
     citizen: '',
     contact: '',
@@ -944,11 +945,37 @@ function ComplaintModal({
   async function pickPhoto(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     setPhotoError('');
+    setScan({ state: 'idle' });
     if (!file) return;
     try {
       set('photo', await shrinkPhoto(file));
     } catch {
       setPhotoError(t.photoFail);
+    }
+  }
+
+  // Send the shrunk photo to the damage model; the top detection pre-fills category and severity.
+  async function detect() {
+    setScan({ state: 'busy' });
+    try {
+      const body = new FormData();
+      body.append('file', await (await fetch(form.photo)).blob(), 'photo.jpg');
+      const res = await fetch(`${API_BASE}/api/damage/detect`, {
+        method: 'POST',
+        headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+        body,
+      });
+      if (!res.ok) throw new Error(`detect ${res.status}`);
+      const data: { detections: Detection[]; image: { width: number; height: number } } = await res.json();
+      setScan({ state: 'done', found: data.detections, size: data.image });
+      const top = data.detections[0];
+      if (top) {
+        const s = suggestFromDetection(top.label);
+        set('category', s.category);
+        set('severity', s.severity);
+      }
+    } catch {
+      setScan({ state: 'fail' });
     }
   }
 
@@ -1061,8 +1088,34 @@ function ComplaintModal({
           {photoError && <div className="error" role="alert">{photoError}</div>}
           {form.photo && (
             <div className="photo-preview">
-              <img src={form.photo} alt={t.photo} />
-              <button type="button" className="secondary" onClick={() => set('photo', '')}>{t.photoRemove}</button>
+              <div className="detect-frame">
+                <img src={form.photo} alt={t.photo} />
+                {scan.found && scan.size && scan.found.map((d, i) => {
+                  const { width: w, height: h } = scan.size!;
+                  const [x1, y1, x2, y2] = d.box;
+                  return (
+                    <div key={i} className="detect-box" style={{ left: `${(x1 / w) * 100}%`, top: `${(y1 / h) * 100}%`, width: `${((x2 - x1) / w) * 100}%`, height: `${((y2 - y1) / h) * 100}%` }}>
+                      <span>{d.label} {Math.round(d.confidence * 100)}%</span>
+                    </div>
+                  );
+                })}
+              </div>
+              <button type="button" className="secondary" onClick={detect} disabled={scan.state === 'busy'}>
+                <Search size={15} /> {scan.state === 'busy' ? t.detecting : t.detect}
+              </button>
+              <button type="button" className="secondary" onClick={() => { set('photo', ''); setScan({ state: 'idle' }); }}>{t.photoRemove}</button>
+            </div>
+          )}
+          {(scan.state === 'done' || scan.state === 'fail') && (
+            <div className="detect-result" aria-live="polite">
+              <b>
+                {scan.state === 'fail'
+                  ? t.detectFail
+                  : scan.found?.length
+                    ? t.detectFound(scan.found[0].label, Math.round(scan.found[0].confidence * 100))
+                    : t.detectNone}
+              </b>
+              <small>{t.detectAdvice}</small>
             </div>
           )}
           {/* Honeypot: hidden from people and screen readers; bots that fill it are rejected. */}
