@@ -43,7 +43,8 @@ import {
 } from 'recharts';
 import { CircleMarker, MapContainer, TileLayer, Polyline, ZoomControl, useMap, useMapEvents } from 'react-leaflet';
 import { API_BASE, Complaint, ComplaintForm, Health, Segment, classifyHealth, useApp } from './state';
-import { LangToggle, PrivacyNotice, T as TXT, TrackComplaint, ASSUMED_PCI, assumedPci, inPlannerArea, metersBetween, nearestSegment, rankRoutes, roadInPlainWords, shrinkPhoto, suggestFromDetection, type Detection } from './citizen';
+import { LangToggle, PrivacyNotice, T as TXT, TrackComplaint, ASSUMED_PCI, assumedPci, inPlannerArea, metersBetween, nearestSegment, rankRoutes, roadInPlainWords, shrinkPhoto } from './citizen';
+import { suggestFromDetections, type Detection } from './damageSuggest';
 import { exifGps } from './exifGps';
 import type { PlannedRoute, RouteCandidate } from './citizen';
 import photoCredits from './photoCredits.json';
@@ -937,7 +938,14 @@ function ComplaintModal({
 }) {
   const { segments, lang, authToken } = useApp();
   const t = TXT[lang];
-  const [scan, setScan] = useState<{ state: 'idle' | 'busy' | 'done' | 'fail'; found?: Detection[]; size?: { width: number; height: number } }>({ state: 'idle' });
+  type Choice = { category: string; severity: string };
+  const [scan, setScan] = useState<{
+    state: 'idle' | 'busy' | 'done' | 'fail';
+    found?: Detection[];
+    size?: { width: number; height: number };
+    rec?: Choice | null; // model recommendation
+    prior?: Choice; // what the user had chosen before detection
+  }>({ state: 'idle' });
   const [form, F] = useState({
     citizen: '',
     contact: '',
@@ -1001,12 +1009,11 @@ function ComplaintModal({
       });
       if (!res.ok) throw new Error(`detect ${res.status}`);
       const data: { detections: Detection[]; image: { width: number; height: number } } = await res.json();
-      setScan({ state: 'done', found: data.detections, size: data.image });
-      const top = data.detections[0];
-      if (top) {
-        const s = suggestFromDetection(top.label);
-        set('category', s.category);
-        set('severity', s.severity);
+      const rec = suggestFromDetections(data.detections, data.image);
+      setScan({ state: 'done', found: data.detections, size: data.image, rec, prior: { category: form.category, severity: form.severity } });
+      if (rec) {
+        set('category', rec.category);
+        set('severity', rec.severity);
       }
     } catch {
       setScan({ state: 'fail' });
@@ -1145,10 +1152,13 @@ function ComplaintModal({
               <b>
                 {scan.state === 'fail'
                   ? t.detectFail
-                  : scan.found?.length
-                    ? t.detectFound(scan.found[0].label, Math.round(scan.found[0].confidence * 100))
+                  : scan.rec && scan.found?.length
+                    ? t.detectFound(scan.found[0].label, Math.round(scan.found[0].confidence * 100), scan.rec.category, scan.rec.severity)
                     : t.detectNone}
               </b>
+              {scan.rec && scan.prior && (scan.prior.category !== scan.rec.category || scan.prior.severity !== scan.rec.severity) && (
+                <span>{t.detectChanged(scan.prior.category, scan.prior.severity)}</span>
+              )}
               <small>{t.detectAdvice}</small>
             </div>
           )}

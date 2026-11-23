@@ -44,7 +44,12 @@ async def detect_damage(
         raise HTTPException(400, "File is not a readable image.")
 
     img = ImageOps.exif_transpose(img).convert("RGB")
-    detections = await run_in_threadpool(get_detector().detect, img, conf)
+    # shortcut: 640 px first, 960 px only if empty, tuned on 6 Kerala phone photos (at 960+ px the model often
+    # calls potholes "Transverse crack"); re-check against a labelled set before trusting it further.
+    for size in (640, 960):
+        detections = await run_in_threadpool(get_detector().detect, img, conf, 0.7, size)
+        if detections:
+            break
     return {
         "detections": detections,
         "image": {"width": img.width, "height": img.height},

@@ -18,7 +18,8 @@ export const T = {
     detect: 'Detect damage', detecting: 'Scanning for road damage…',
     detectFail: 'Detection failed. Choose the category yourself.',
     detectNone: 'No damage found in this photo. Choose the category yourself.',
-    detectFound: (label: string, pct: number) => `Looks like: ${label} (${pct}% confidence). Category and severity are filled in for you.`,
+    detectFound: (label: string, pct: number, category: string, severity: string) => `Detected: ${label} (${pct}% confidence). Recommended: ${category} · ${severity}.`,
+    detectChanged: (category: string, severity: string) => `You had chosen ${category} · ${severity}; changed to the recommendation. You can change it back.`,
     detectAdvice: 'This is an automatic suggestion and it is often wrong. Check the category and severity before you submit.',
     category: 'Issue category', severity: 'Severity', description: 'Description', descHint: 'Location and condition',
     consent: 'I agree that DigiRoad stores my name and contact number to follow up on this complaint, as described in the',
@@ -62,7 +63,8 @@ export const T = {
     detect: 'കേടുപാട് കണ്ടെത്തുക', detecting: 'റോഡിലെ കേടുപാടുകൾ പരിശോധിക്കുന്നു…',
     detectFail: 'പരിശോധന പരാജയപ്പെട്ടു. പ്രശ്നത്തിന്റെ തരം സ്വയം തിരഞ്ഞെടുക്കുക.',
     detectNone: 'ഈ ഫോട്ടോയിൽ കേടുപാടുകൾ കണ്ടെത്തിയില്ല. പ്രശ്നത്തിന്റെ തരം സ്വയം തിരഞ്ഞെടുക്കുക.',
-    detectFound: (label: string, pct: number) => `കണ്ടെത്തിയത്: ${label} (${pct}% ഉറപ്പ്). തരവും ഗൗരവവും പൂരിപ്പിച്ചിട്ടുണ്ട്.`,
+    detectFound: (label: string, pct: number, category: string, severity: string) => `കണ്ടെത്തിയത്: ${label} (${pct}% ഉറപ്പ്). നിർദ്ദേശിക്കുന്നത്: ${category} · ${severity}.`,
+    detectChanged: (category: string, severity: string) => `നിങ്ങൾ തിരഞ്ഞെടുത്തിരുന്നത് ${category} · ${severity} ആയിരുന്നു; നിർദ്ദേശത്തിലേക്ക് മാറ്റി. വേണമെങ്കിൽ തിരികെ മാറ്റാം.`,
     detectAdvice: 'ഇത് യന്ത്രം നൽകുന്ന നിർദ്ദേശം മാത്രമാണ്, പലപ്പോഴും തെറ്റാകാം. സമർപ്പിക്കുന്നതിന് മുൻപ് തരവും ഗൗരവവും പരിശോധിക്കുക.',
     category: 'പ്രശ്നത്തിന്റെ തരം', severity: 'ഗൗരവം', description: 'വിവരണം', descHint: 'സ്ഥലവും അവസ്ഥയും',
     consent: 'ഈ പരാതിയുടെ തുടർനടപടിക്കായി എന്റെ പേരും ഫോൺ നമ്പറും DigiRoad സൂക്ഷിക്കുന്നതിന് ഞാൻ സമ്മതിക്കുന്നു. വിശദാംശങ്ങൾ:',
@@ -217,22 +219,6 @@ export function rankRoutes(candidates: RouteCandidate[], segments: Segment[]): P
 /** "Is my road safe?" in everyday words, from the road health band. */
 export function roadInPlainWords(h: Health, lang: Lang = 'en'): string {
   return T[lang].plain[h] || T[lang].plain['Very Poor'];
-}
-
-export type Detection = { label: string; confidence: number; box: [number, number, number, number] };
-
-/** Map a model class to the complaint form's category and severity.
- * shortcut: severity comes from the damage class only, not box size or count; refine with engineer input. */
-export function suggestFromDetection(label: string): { category: string; severity: string } {
-  const table: Record<string, [string, string]> = {
-    Pothole: ['Pothole', 'High'],
-    'Alligator crack': ['Cracking', 'High'],
-    'Longitudinal crack': ['Cracking', 'Medium'],
-    'Transverse crack': ['Cracking', 'Medium'],
-    'Surface deterioration': ['Surface damage', 'Low'],
-  };
-  const [category, severity] = table[label] || ['Other', 'Medium'];
-  return { category, severity };
 }
 
 /** Shrink a photo in the browser to max 1280 px JPEG, so an upload stays around 200 KB. */
