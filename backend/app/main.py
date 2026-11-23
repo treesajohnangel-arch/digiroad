@@ -14,7 +14,8 @@ from app.api.simulations import router as simulations_router
 from app.api.routers import trends
 from app.api.agent import router as agent_router
 from app.api.routers import chat
-from app.core.authentication import require_admin
+from app.ml.fastapi_router import router as damage_router
+from app.core.authentication import require_admin, get_current_user
 from app.scheduler import start_scheduler, shutdown_scheduler
 
 
@@ -80,6 +81,8 @@ app.include_router(simulations_router, prefix="/api/simulations")
 app.include_router(trends.router)
 app.include_router(agent_router, prefix="/api/agent")
 app.include_router(chat.router)
+# Model inference is CPU-heavy on the free tier: logged-in users only.
+app.include_router(damage_router, dependencies=[Depends(get_current_user)])
 
 
 @app.get("/", tags=["Health Check"])

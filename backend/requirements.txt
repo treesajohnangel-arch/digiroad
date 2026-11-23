@@ -7,3 +7,8 @@ python-dotenv>=1.0.0
 httpx>=0.27.0
 apscheduler
 PyJWT>=2.8.0
+onnxruntime>=1.17
+numpy>=1.24
+Pillow>=10.0
+opencv-python-headless>=4.8
+python-multipart>=0.0.9
