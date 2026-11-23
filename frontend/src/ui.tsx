@@ -44,6 +44,7 @@ import {
 import { CircleMarker, MapContainer, TileLayer, Polyline, ZoomControl, useMap, useMapEvents } from 'react-leaflet';
 import { API_BASE, Complaint, ComplaintForm, Health, Segment, classifyHealth, useApp } from './state';
 import { LangToggle, PrivacyNotice, T as TXT, TrackComplaint, ASSUMED_PCI, assumedPci, inPlannerArea, metersBetween, nearestSegment, rankRoutes, roadInPlainWords, shrinkPhoto, suggestFromDetection, type Detection } from './citizen';
+import { exifGps } from './exifGps';
 import type { PlannedRoute, RouteCandidate } from './citizen';
 import photoCredits from './photoCredits.json';
 
@@ -801,6 +802,30 @@ function RoadFallback() {
   );
 }
 
+type Priority = NonNullable<Complaint['priority']>;
+// Priority badges reuse the severity colour classes.
+const PRIORITY_CLASS: Record<Priority, string> = { P1: 'critical', P2: 'high', P3: 'medium', P4: 'low' };
+const PRIORITY_WORD: Record<Priority, string> = { P1: 'Urgent', P2: 'High', P3: 'Normal', P4: 'Low' };
+
+function PrioritySelect({ c }: { c: Complaint }) {
+  const { setPriority } = useApp();
+  return (
+    <span className="priority-select" onClick={e => e.stopPropagation()}>
+      <select
+        aria-label={`Priority for complaint ${c.id}`}
+        value={c.priority || ''}
+        onChange={e => setPriority(c.id, e.target.value as Priority)}
+      >
+        {!c.priority && <option value="">No priority</option>}
+        {(Object.keys(PRIORITY_WORD) as Priority[]).map(p => (
+          <option key={p} value={p}>{p} · {PRIORITY_WORD[p]}</option>
+        ))}
+      </select>
+      <small>{c.prioritySource === 'admin' ? 'Set by admin' : 'Automatic'}</small>
+    </span>
+  );
+}
+
 function ComplaintTable({
   title,
   entries,
@@ -834,6 +859,7 @@ function ComplaintTable({
               <b>
                 {c.category}
                 <i className={`severity ${c.severity.toLowerCase()}`}>{c.severity}</i>
+                {c.priority && <i className={`severity ${PRIORITY_CLASS[c.priority]}`} title={`Priority: ${PRIORITY_WORD[c.priority]}`}>{c.priority}</i>}
               </b>
               <small>
                 {c.id} · {segments.find(s => s.id === c.segmentId)?.name || c.segmentId}
@@ -948,7 +974,14 @@ function ComplaintModal({
     setScan({ state: 'idle' });
     if (!file) return;
     try {
-      set('photo', await shrinkPhoto(file));
+      const [photo, gps] = await Promise.all([shrinkPhoto(file), file.arrayBuffer().then(exifGps)]);
+      set('photo', photo);
+      if (gps) {
+        pick(gps[0], gps[1]);
+        setWhere(w => `${t.fromPhoto} ${w}`);
+      } else if (!pin) {
+        setWhere(t.photoNoGps);
+      }
     } catch {
       setPhotoError(t.photoFail);
     }
@@ -960,7 +993,8 @@ function ComplaintModal({
     try {
       const body = new FormData();
       body.append('file', await (await fetch(form.photo)).blob(), 'photo.jpg');
-      const res = await fetch(`${API_BASE}/api/damage/detect`, {
+      // conf 0.15: on real phone photos the model scores clear potholes around 0.2, below its 0.25 default.
+      const res = await fetch(`${API_BASE}/api/damage/detect?conf=0.15`, {
         method: 'POST',
         headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
         body,
@@ -1842,10 +1876,11 @@ function Admin() {
         <div className="admin-columns">
           <span>Report</span>
           <span>Road segment</span>
-          <span>Severity</span>
+          <span>Severity and priority</span>
           <span>Status and actions</span>
         </div>
-        {complaints.map(c => {
+        {/* Most urgent first; stable sort keeps newest-first within a priority. */}
+        {[...complaints].sort((a, b) => (a.priority || 'P9').localeCompare(b.priority || 'P9')).map(c => {
           const seg = segments.find(s => s.id === c.segmentId);
           return (
             <div
@@ -1869,7 +1904,10 @@ function Admin() {
                   </small>
                 )}
               </span>
-              <span className={`severity-text ${c.severity.toLowerCase()}`}>{c.severity}</span>
+              <span>
+                <span className={`severity-text ${c.severity.toLowerCase()}`}>{c.severity}</span>
+                <PrioritySelect c={c} />
+              </span>
               <div>
                 {c.status === 'nil' ? (
                   <div className="repair-status-cell">
@@ -2087,13 +2125,14 @@ function Admin() {
 }
 
 function ComplaintDetailModal({
-  complaint: c,
+  complaint,
   close,
 }: {
   complaint: Complaint;
   close: () => void;
 }) {
-  const { segments, role, markUnderProcess } = useApp();
+  const { segments, role, markUnderProcess, complaints } = useApp();
+  const c = complaints.find(x => x.id === complaint.id) || complaint; // live record, so a priority change shows at once
   const seg = segments.find(s => s.id === c.segmentId);
 
   return (
@@ -2125,6 +2164,16 @@ function ComplaintDetailModal({
           <div className="severity-badge-wrap">
             <span className="label">Severity</span>
             <span className={`severity-text ${c.severity.toLowerCase()}`}>{c.severity}</span>
+          </div>
+          <div className="severity-badge-wrap">
+            <span className="label">Priority</span>
+            {role === 'admin' ? (
+              <PrioritySelect c={c} />
+            ) : c.priority ? (
+              <span className={`severity-text ${PRIORITY_CLASS[c.priority]}`}>{c.priority} · {PRIORITY_WORD[c.priority]}</span>
+            ) : (
+              <span>—</span>
+            )}
           </div>
         </div>
 

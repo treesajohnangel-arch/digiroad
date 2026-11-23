@@ -34,9 +34,11 @@ export type Complaint = {
   repairedAt?: string;
   repairType?: 'PATCHING' | 'FULL_RESURFACING';
   photoUrl?: string;
+  priority?: 'P1' | 'P2' | 'P3' | 'P4';
+  prioritySource?: 'auto' | 'admin';
 };
 
-export type ComplaintForm = Omit<Complaint, 'id' | 'status' | 'created' | 'photoUrl'> & { consent: boolean; website: string; photo: string };
+export type ComplaintForm = Omit<Complaint, 'id' | 'status' | 'created' | 'photoUrl' | 'priority' | 'prioritySource'> & { consent: boolean; website: string; photo: string };
 
 type ApiComplaint = {
   complaint_id: string;
@@ -51,6 +53,8 @@ type ApiComplaint = {
   contact?: string | null;
   severity?: string | null;
   photo_url?: string | null;
+  priority?: string | null;
+  priority_source?: string | null;
 };
 
 export function normalizeStatus(st?: string | null): 'nil' | 'Under Progress' | 'Repaired' {
@@ -81,6 +85,8 @@ function fromApiComplaint(row: ApiComplaint): Complaint {
     repairType: ['PATCHING', 'FULL_RESURFACING'].includes(String(row.repair_type || '').toUpperCase())
       ? String(row.repair_type).toUpperCase() as Complaint['repairType'] : undefined,
     photoUrl: row.photo_url || undefined,
+    priority: ['P1', 'P2', 'P3', 'P4'].includes(row.priority || '') ? row.priority as Complaint['priority'] : undefined,
+    prioritySource: row.priority_source === 'admin' ? 'admin' : 'auto',
   };
 }
 
@@ -163,6 +169,7 @@ type AppState = {
   liveData: boolean; // true once road values have loaded from dynamic_road_evaluations
   addComplaint: (c: ComplaintForm) => Promise<boolean>;
   markUnderProcess: (id: string) => Promise<boolean>;
+  setPriority: (id: string, priority: NonNullable<Complaint['priority']>) => Promise<boolean>;
   repair: (id: string) => void;
   executeRepair: (payload: RepairActionPayload) => Promise<boolean>;
   trendLogs: Record<string, TrendPoint[]>;
@@ -384,6 +391,27 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // Admin override of the automatic priority.
+  const setPriority = async (id: string, priority: NonNullable<Complaint['priority']>): Promise<boolean> => {
+    try {
+      const res = await fetch(`${API_BASE}/api/complaints/${encodeURIComponent(id)}/priority`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
+        body: JSON.stringify({ priority }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Priority update failed (${res.status})`);
+      }
+      setComplaints(prev => prev.map(c => (c.id === id ? { ...c, priority, prioritySource: 'admin' } : c)));
+      notify(`Complaint #${id} set to ${priority}`);
+      return true;
+    } catch (err) {
+      notify(err instanceof TypeError ? NETWORK_MSG : err instanceof Error ? err.message : 'Could not update priority.');
+      return false;
+    }
+  };
+
   const addComplaint = async (form: ComplaintForm): Promise<boolean> => {
     const payload = {
       segment_id: form.segmentId,
@@ -427,7 +455,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         newC.severity = form.severity;
         newC.status = 'nil';
         setComplaints(prev => [newC, ...prev]);
-        notify(`Complaint #${newC.id} submitted. Use this number on Track complaint to follow it.`);
+        notify(`Complaint #${newC.id} submitted${newC.priority ? ` (priority ${newC.priority})` : ''}. Use this number on Track complaint to follow it.`);
         return true;
       }
       const body = await res.json().catch(() => ({}));
@@ -605,6 +633,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       liveData,
       addComplaint,
       markUnderProcess,
+      setPriority,
       repair,
       executeRepair,
       trendLogs,

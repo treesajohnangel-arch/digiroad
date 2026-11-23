@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Optional, Any
+from typing import Optional, Any, Literal
 from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
 
@@ -28,6 +28,10 @@ class ComplaintFeedback(BaseModel):
     comment: Optional[str] = Field(None, max_length=300)
 
 
+class ComplaintPriority(BaseModel):
+    priority: Literal["P1", "P2", "P3", "P4"]
+
+
 class ComplaintResponse(BaseModel):
     complaint_id: str
     segment_id: str
@@ -41,6 +45,8 @@ class ComplaintResponse(BaseModel):
     contact: Optional[str] = None
     severity: Optional[str] = None
     photo_url: Optional[str] = None
+    priority: Optional[str] = None
+    priority_source: Optional[str] = None
 
     @field_validator("complaint_id", mode="before")
     @classmethod

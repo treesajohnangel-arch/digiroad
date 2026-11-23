@@ -451,6 +451,9 @@ input::placeholder, textarea::placeholder { color: var(--soft) !important; }
 .detect-box span { position: absolute; left: -2px; bottom: 100%; background: #e8590c; color: #fff; font: 600 11px/1.4 var(--mono); padding: 0 4px; white-space: nowrap; }
 .detect-result { display: grid; gap: 4px; margin: -6px 0 14px; padding: 10px 12px; border: 1px dashed var(--line); background: var(--tile); }
 .detect-result small { color: var(--muted); }
+.priority-select { display: grid; gap: 2px; margin-top: 6px; }
+.priority-select select { font: inherit; font-size: 12px; padding: 3px 6px; border: 1px solid var(--line); background: var(--paper); }
+.priority-select small { color: var(--muted); font-size: 10px; }
 .route-layout { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
 .route-map { height: 520px; }
 .route-list { display: flex; flex-direction: column; gap: 12px; max-height: 520px; overflow-y: auto; }

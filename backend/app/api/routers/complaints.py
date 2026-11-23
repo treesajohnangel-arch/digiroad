@@ -14,6 +14,7 @@ from app.schemas.complaint import (
     ComplaintStatus,
     ComplaintCreate,
     ComplaintFeedback,
+    ComplaintPriority,
     ComplaintResponse,
     ComplaintSchema,
     Complaint,
@@ -77,6 +78,33 @@ def _upload_photo(raw: str) -> str:
     except Exception as e:
         logger.warning(f"Photo upload failed: {e}")
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Photo could not be saved. Try again, or submit without a photo.") from e
+
+
+SEVERITY_POINTS = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+
+
+def auto_priority(severity: Optional[str], heading: Optional[str], pci: Optional[float]) -> str:
+    """P1 (urgent) to P4 (low) from reported severity, damage type and the road's current PCI."""
+    score = SEVERITY_POINTS.get((severity or "").strip().lower(), 2)
+    if pci is not None:
+        score += 2 if pci < 40 else 1 if pci < 70 else 0
+    if (heading or "").strip().lower() == "pothole":
+        score += 1
+    return "P1" if score >= 5 else "P2" if score == 4 else "P3" if score == 3 else "P4"
+
+
+def _segment_pci(segment_id: str) -> Optional[float]:
+    """Latest PCI for a segment (live evaluation first, survey baseline second); None if unknown."""
+    if supabase is None:
+        return None
+    try:
+        for table in ("dynamic_road_evaluations", "road_segments"):
+            res = supabase.table(table).select("pci_score").eq("segment_id", segment_id).limit(1).execute()
+            if res.data and res.data[0].get("pci_score") is not None:
+                return float(res.data[0]["pci_score"])
+    except Exception as e:
+        logger.warning(f"PCI lookup failed for {segment_id}: {e}")
+    return None
 
 
 def _check_rate_limit(user_id: str) -> None:
@@ -177,6 +205,7 @@ async def generate_complaint(complaint_in: ComplaintCreate, current_user: Dict[s
     photo_url = _upload_photo(complaint_in.photo_base64) if complaint_in.photo_base64 else None
     now = datetime.now(timezone.utc).isoformat()
     generated_cmp_id = f"cmp-{uuid.uuid4().hex[:8]}"
+    priority = auto_priority(complaint_in.severity, heading, _segment_pci(target_segment))
 
     # Fallback in-memory record structure
     fallback_record: Dict[str, Any] = {
@@ -190,6 +219,8 @@ async def generate_complaint(complaint_in: ComplaintCreate, current_user: Dict[s
         "citizen_name": complaint_in.citizen_name,
         "contact": complaint_in.contact,
         "severity": complaint_in.severity,
+        "priority": priority,
+        "priority_source": "auto",
     }
 
     if supabase is not None:
@@ -204,10 +235,21 @@ async def generate_complaint(complaint_in: ComplaintCreate, current_user: Dict[s
                 "citizen_name": complaint_in.citizen_name,
                 "contact": complaint_in.contact,
                 "severity": complaint_in.severity,
+                "priority": priority,
+                "priority_source": "auto",
             }
             if photo_url:  # only send the column when used, so old databases without it keep working
                 db_payload["photo_url"] = photo_url
-            res = supabase.table("user_complaints").insert(db_payload).execute()
+            try:
+                res = supabase.table("user_complaints").insert(db_payload).execute()
+            except Exception as e:
+                if "priority" not in str(e):
+                    raise
+                # Database not migrated yet: save the complaint without priority rather than lose it.
+                logger.warning("priority columns missing; run migrations/20261123_complaint_priority.sql")
+                db_payload.pop("priority")
+                db_payload.pop("priority_source")
+                res = supabase.table("user_complaints").insert(db_payload).execute()
             if res.data and len(res.data) > 0:
                 created = res.data[0]
                 created["complaint_id"] = str(created.get("complaint_id"))
@@ -316,6 +358,31 @@ async def mark_complaint_under_process(complaint_id: str, _admin: Dict[str, Any]
         status_code=status.HTTP_404_NOT_FOUND,
         detail=f"Complaint with ID '{complaint_id}' not found.",
     )
+
+
+@router.patch("/{complaint_id}/priority", response_model=ComplaintResponse)
+async def set_complaint_priority(complaint_id: str, payload: ComplaintPriority, _admin: Dict[str, Any] = Depends(require_admin)):
+    """Admin overrides the automatic priority."""
+    if supabase is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is not configured.")
+    if not complaint_id.isdigit():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid complaint ID.")
+    try:
+        res = (
+            supabase.table("user_complaints")
+            .update({"priority": payload.priority, "priority_source": "admin"})
+            .eq("complaint_id", int(complaint_id))
+            .execute()
+        )
+    except Exception as e:
+        logger.error("Priority update failed for %s: %s", complaint_id, e)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="Priority could not be saved. The database needs the priority columns.") from e
+    if not res.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No complaint with ID {complaint_id}.")
+    row = res.data[0]
+    row["complaint_id"] = str(row.get("complaint_id"))
+    return row
 
 
 @router.get("/repaired", response_model=List[ComplaintResponse])
