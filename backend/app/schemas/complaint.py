@@ -21,6 +21,8 @@ class ComplaintCreate(BaseModel):
     consent: bool = Field(False, description="Citizen agreed to the privacy notice")
     website: Optional[str] = Field(None, description="Honeypot: real users never fill this hidden field")
     photo_base64: Optional[str] = Field(None, max_length=1_500_000, description="Optional JPEG/PNG photo, base64 or data URL, max 1 MB decoded")
+    latitude: Optional[float] = Field(None, ge=-90, le=90, description="Exact damage location (pin, GPS or photo geotag)")
+    longitude: Optional[float] = Field(None, ge=-180, le=180)
 
 
 class ComplaintFeedback(BaseModel):
@@ -47,6 +49,8 @@ class ComplaintResponse(BaseModel):
     photo_url: Optional[str] = None
     priority: Optional[str] = None
     priority_source: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
     @field_validator("complaint_id", mode="before")
     @classmethod

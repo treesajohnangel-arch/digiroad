@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
-import type { Health, Segment } from './state';
+import type { Complaint, Health, Segment } from './state';
 
 // MapLibre 6 loads its tile worker from a separate file; point it at the copy Vite emits.
 maplibregl.setWorkerUrl(workerUrl);
@@ -15,6 +15,7 @@ const ROAD_HALF_WIDTH_M = 12; // width of the raised road block
 const RAISED_M = 60; // height of the hovered segment
 const FLAT_M = 2;
 const HIT_LAYERS = ['seg-3d', 'seg'];
+const PRIORITY_COLOR: Record<string, string> = { P1: '#b91c1c', P2: '#ea580c', P3: '#ca8a04', P4: '#4b5563' };
 
 const lngLat = ([lat, lng]: [number, number]) => [lng, lat];
 const colorOf = (s: Segment) => HEALTH_COLOR[s.health] || HEALTH_COLOR.Good;
@@ -68,6 +69,40 @@ function sources(segments: Segment[], selectedId?: string) {
   };
 }
 
+/** Open complaints that have an exact location, as map points. */
+function complaintPoints(complaints: Complaint[]): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: complaints
+      .filter(c => c.lat != null && c.lng != null && c.status !== 'Repaired')
+      .map(c => ({
+        type: 'Feature' as const,
+        properties: { id: c.id, color: PRIORITY_COLOR[c.priority || ''] || '#0073cf' },
+        geometry: { type: 'Point' as const, coordinates: [c.lng!, c.lat!] },
+      })),
+  };
+}
+
+/** Popup body built from DOM nodes: complaint text is user input, so it is never parsed as HTML. */
+function complaintPopup(c: Complaint): HTMLElement {
+  const box = document.createElement('div');
+  box.className = 'map3d-popup';
+  if (c.photoUrl) {
+    const img = document.createElement('img');
+    img.src = c.photoUrl;
+    img.alt = `Photo for complaint ${c.id}`;
+    box.appendChild(img);
+  }
+  const title = document.createElement('b');
+  title.textContent = `#${c.id} · ${c.category}`;
+  const meta = document.createElement('small');
+  meta.textContent = [c.severity, c.priority, c.status === 'nil' ? 'Received' : c.status].filter(Boolean).join(' · ');
+  const desc = document.createElement('p');
+  desc.textContent = c.description;
+  box.append(title, meta, desc);
+  return box;
+}
+
 function boundsOf(coords: [number, number][]) {
   const b = new maplibregl.LngLatBounds();
   coords.forEach(([lat, lng]) => b.extend([lng, lat]));
@@ -80,19 +115,21 @@ function boundsOf(coords: [number, number][]) {
  */
 export default function Map3D({
   segments,
+  complaints = [],
   selected,
   onSelect,
   fallback,
 }: {
   segments: Segment[];
+  complaints?: Complaint[];
   selected: Segment | null;
   onSelect: (s: Segment) => void;
   fallback: React.ReactNode;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const latest = useRef({ segments, selected, onSelect });
-  latest.current = { segments, selected, onSelect };
+  const latest = useRef({ segments, complaints, selected, onSelect });
+  latest.current = { segments, complaints, selected, onSelect };
   const [failed, setFailed] = useState(false);
   const fitted = useRef(false);
 
@@ -171,9 +208,30 @@ export default function Map3D({
         paint: { 'text-color': '#17233b', 'text-halo-color': '#ffffff', 'text-halo-width': 2 },
       });
 
-      map.on('mousemove', e => setHover(hitAt(e.point)));
+      map.addSource('complaints', { type: 'geojson', data: complaintPoints(latest.current.complaints) });
+      map.addLayer({
+        id: 'complaints',
+        type: 'circle',
+        source: 'complaints',
+        paint: { 'circle-radius': 8, 'circle-color': ['get', 'color'], 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 3 },
+      });
+
+      map.on('mousemove', e => {
+        if (map.queryRenderedFeatures(e.point, { layers: ['complaints'] }).length) {
+          setHover(null);
+          map.getCanvas().style.cursor = 'pointer';
+          return;
+        }
+        setHover(hitAt(e.point));
+      });
       map.on('mouseout', () => setHover(null));
       map.on('click', e => {
+        const pin = map.queryRenderedFeatures(e.point, { layers: ['complaints'] })[0];
+        const c = pin && latest.current.complaints.find(x => x.id === pin.properties?.id);
+        if (c) {
+          new maplibregl.Popup({ maxWidth: '260px' }).setLngLat([c.lng!, c.lat!]).setDOMContent(complaintPopup(c)).addTo(map);
+          return;
+        }
         const id = hitAt(e.point);
         const s = latest.current.segments.find(x => x.id === id);
         if (s) latest.current.onSelect(s);
@@ -208,6 +266,10 @@ export default function Map3D({
   }, [segments, selected]);
 
   useEffect(() => {
+    (mapRef.current?.getSource('complaints') as maplibregl.GeoJSONSource | undefined)?.setData(complaintPoints(complaints));
+  }, [complaints]);
+
+  useEffect(() => {
     const map = mapRef.current;
     if (map && selected?.coords.length) map.fitBounds(boundsOf(selected.coords), { padding: 70, pitch: 60, duration: 800 });
   }, [selected]);
@@ -218,7 +280,7 @@ export default function Map3D({
       ref={host}
       className="map3d"
       role="region"
-      aria-label="3D road condition map. Hover a road segment to raise it, click it for details."
+      aria-label="3D road condition map. Hover a road segment to raise it, click it for details. Coloured dots are open complaints; click one to see its photo."
     />
   );
 }

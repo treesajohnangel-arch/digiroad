@@ -221,6 +221,8 @@ async def generate_complaint(complaint_in: ComplaintCreate, current_user: Dict[s
         "severity": complaint_in.severity,
         "priority": priority,
         "priority_source": "auto",
+        "latitude": complaint_in.latitude,
+        "longitude": complaint_in.longitude,
     }
 
     if supabase is not None:
@@ -240,15 +242,19 @@ async def generate_complaint(complaint_in: ComplaintCreate, current_user: Dict[s
             }
             if photo_url:  # only send the column when used, so old databases without it keep working
                 db_payload["photo_url"] = photo_url
+            if complaint_in.latitude is not None and complaint_in.longitude is not None:
+                db_payload["latitude"] = complaint_in.latitude
+                db_payload["longitude"] = complaint_in.longitude
+            optional_cols = ("priority", "priority_source", "latitude", "longitude")
             try:
                 res = supabase.table("user_complaints").insert(db_payload).execute()
             except Exception as e:
-                if "priority" not in str(e):
+                if not any(c in str(e) for c in optional_cols):
                     raise
-                # Database not migrated yet: save the complaint without priority rather than lose it.
-                logger.warning("priority columns missing; run migrations/20261123_complaint_priority.sql")
-                db_payload.pop("priority")
-                db_payload.pop("priority_source")
+                # Database not migrated yet: save the complaint without the new columns rather than lose it.
+                logger.warning(f"optional complaint columns missing, run the latest migrations: {e}")
+                for c in optional_cols:
+                    db_payload.pop(c, None)
                 res = supabase.table("user_complaints").insert(db_payload).execute()
             if res.data and len(res.data) > 0:
                 created = res.data[0]

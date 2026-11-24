@@ -36,6 +36,8 @@ export type Complaint = {
   photoUrl?: string;
   priority?: 'P1' | 'P2' | 'P3' | 'P4';
   prioritySource?: 'auto' | 'admin';
+  lat?: number; // exact damage location, when the reporter set a pin, GPS fix or photo geotag
+  lng?: number;
 };
 
 export type ComplaintForm = Omit<Complaint, 'id' | 'status' | 'created' | 'photoUrl' | 'priority' | 'prioritySource'> & { consent: boolean; website: string; photo: string };
@@ -55,6 +57,8 @@ type ApiComplaint = {
   photo_url?: string | null;
   priority?: string | null;
   priority_source?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
 };
 
 export function normalizeStatus(st?: string | null): 'nil' | 'Under Progress' | 'Repaired' {
@@ -87,6 +91,8 @@ function fromApiComplaint(row: ApiComplaint): Complaint {
     photoUrl: row.photo_url || undefined,
     priority: ['P1', 'P2', 'P3', 'P4'].includes(row.priority || '') ? row.priority as Complaint['priority'] : undefined,
     prioritySource: row.priority_source === 'admin' ? 'admin' : 'auto',
+    lat: row.latitude ?? undefined,
+    lng: row.longitude ?? undefined,
   };
 }
 
@@ -423,6 +429,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       consent: form.consent,
       website: form.website,
       photo_base64: form.photo || undefined,
+      latitude: form.lat,
+      longitude: form.lng,
     };
     const queue = () => {
       try {

@@ -606,6 +606,7 @@ function Home() {
         <div className="map-wrap">
           <React.Suspense fallback={<div className="map3d loading">Loading 3D map…</div>}>
             <Map3D
+              complaints={complaints}
               selected={selected}
               onSelect={Sel}
               segments={segments}
@@ -1032,7 +1033,7 @@ function ComplaintModal({
 
   async function send(e: React.FormEvent) {
     e.preventDefault();
-    if (await submit(form)) close();
+    if (await submit({ ...form, lat: pin?.[0], lng: pin?.[1] })) close();
   }
 
   return (

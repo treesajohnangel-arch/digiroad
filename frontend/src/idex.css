@@ -468,3 +468,7 @@ input::placeholder, textarea::placeholder { color: var(--soft) !important; }
   .route-map { height: 380px; }
   .route-list { max-height: none; }
 }
+.map3d-popup { display: grid; gap: 4px; font: 12px/1.4 var(--sans); color: var(--ink); }
+.map3d-popup img { width: 100%; max-height: 160px; object-fit: cover; border: 1px solid var(--line); }
+.map3d-popup small { color: var(--muted); }
+.map3d-popup p { margin: 0; }
